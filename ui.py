@@ -1,6 +1,7 @@
 import threading
 import time
 import tkinter as tk
+from tkinter import ttk
 
 import pyautogui
 
@@ -9,20 +10,21 @@ from controller import Controller
 
 VERSION = '1.1.0'
 
-BG = '#1A1A2E'
-PANEL = '#16213E'
-ACCENT = '#E94560'
-TEXT = '#EAEAEA'
-BTN = '#0F3460'
-STOP_COLOR = '#4A4A6A'
-SEP_COLOR = '#2A2A4E'
+BG = '#F5F5F5'
+TEXT = '#222222'
+MUTED = '#888888'
+ENTRY_BG = '#FFFFFF'
+BTN_BG = '#E8E8E8'
+START_BG = '#4A90D9'
+STOP_BG = '#E8E8E8'
+BORDER = '#CCCCCC'
 
 
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title('Mouser')
-        self.geometry('440x455')
+        self.geometry('400x430')
         self.resizable(False, False)
         self.configure(bg=BG)
         try:
@@ -48,62 +50,68 @@ class App(tk.Tk):
     # ── layout ────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        self._build_coords()
-        self._sep()
+        pad = {'padx': 12, 'pady': 6}
+
+        # 座標設定
+        self._section('座標設定')
+        self._ax, self._ay = self._coord_row('地点 A')
+        self._bx, self._by = self._coord_row('地点 B')
+
+        # 往復間隔
+        self._section('往復間隔')
         self._build_interval()
-        self._sep()
+
+        # 移動速度
+        self._section('移動速度')
         self._build_speed()
-        self._sep()
+
+        # ボタン
         self._build_controls()
-        self._sep()
+
+        # ステータス
         self._build_status()
-        self._sep()
+
+        # フッター
         self._build_footer()
 
-    def _sep(self) -> None:
-        tk.Frame(self, bg=SEP_COLOR, height=1).pack(fill='x', padx=10, pady=2)
+    def _section(self, title: str) -> None:
+        tk.Label(self, text=title, bg=BG, fg=MUTED,
+                 font=('Helvetica', 9)).pack(anchor='w', padx=14, pady=(8, 1))
+        tk.Frame(self, bg=BORDER, height=1).pack(fill='x', padx=12)
 
-    def _panel(self, title: str) -> tk.Frame:
-        outer = tk.Frame(self, bg=PANEL, padx=8, pady=5)
-        outer.pack(fill='x', padx=10, pady=2)
-        tk.Label(outer, text=title, fg=ACCENT, bg=PANEL, font=('Helvetica', 10, 'bold')).pack(anchor='w', pady=(0, 3))
-        return outer
-
-    def _build_coords(self) -> None:
-        p = self._panel('座標設定')
-        self._ax, self._ay = self._coord_row(p, '地点 A')
-        self._bx, self._by = self._coord_row(p, '地点 B')
-
-    def _coord_row(self, parent: tk.Frame, label: str) -> tuple[tk.StringVar, tk.StringVar]:
-        row = tk.Frame(parent, bg=PANEL)
-        row.pack(fill='x', pady=2)
-        tk.Label(row, text=label, fg=TEXT, bg=PANEL, width=7, anchor='w', font=('Helvetica', 10)).pack(side='left')
-        xv = tk.StringVar()
-        yv = tk.StringVar()
+    def _coord_row(self, label: str) -> tuple[tk.StringVar, tk.StringVar]:
+        row = tk.Frame(self, bg=BG)
+        row.pack(fill='x', padx=12, pady=3)
+        tk.Label(row, text=label, bg=BG, fg=TEXT, width=7,
+                 anchor='w', font=('Helvetica', 10)).pack(side='left')
+        xv, yv = tk.StringVar(), tk.StringVar()
         for axis, var in (('X', xv), ('Y', yv)):
-            tk.Label(row, text=axis, fg=TEXT, bg=PANEL, font=('Helvetica', 10)).pack(side='left', padx=(3, 1))
-            tk.Entry(row, textvariable=var, width=6, bg=BTN, fg=TEXT,
-                     insertbackground=TEXT, relief='flat', font=('Helvetica', 10)).pack(side='left', padx=(0, 2))
+            tk.Label(row, text=axis, bg=BG, fg=MUTED,
+                     font=('Helvetica', 10)).pack(side='left', padx=(6, 2))
+            tk.Entry(row, textvariable=var, width=6, bg=ENTRY_BG, fg=TEXT,
+                     relief='solid', bd=1, font=('Helvetica', 10),
+                     highlightthickness=0).pack(side='left')
             var.trace_add('write', lambda *_: self._save_if_valid())
         tk.Button(
-            row, text='現在地取得', bg=BTN, fg=TEXT, relief='flat',
-            padx=5, pady=2, font=('Helvetica', 9),
-            activebackground=ACCENT, activeforeground='white', cursor='hand2',
-            command=lambda lbl=label, x=xv, y=yv: self._capture(lbl, x, y),
-        ).pack(side='left', padx=6)
+            row, text='現在地取得', bg=BTN_BG, fg=TEXT,
+            relief='solid', bd=1, padx=6, pady=1, font=('Helvetica', 9),
+            cursor='hand2', command=lambda lbl=label, x=xv, y=yv: self._capture(lbl, x, y),
+        ).pack(side='left', padx=(8, 0))
         return xv, yv
 
     def _build_interval(self) -> None:
-        p = self._panel('往復間隔')
-        row = tk.Frame(p, bg=PANEL)
-        row.pack(fill='x', pady=(0, 3))
+        outer = tk.Frame(self, bg=BG)
+        outer.pack(fill='x', padx=12, pady=3)
+
         self._interval = tk.StringVar()
         tk.Spinbox(
-            row, from_=0.5, to=3600, increment=0.5, textvariable=self._interval,
-            width=10, bg=BTN, fg=TEXT, insertbackground=TEXT, buttonbackground=BTN,
-            relief='flat', font=('Helvetica', 11),
-        ).pack(side='left', padx=4)
-        tk.Label(row, text='秒', fg=TEXT, bg=PANEL, font=('Helvetica', 10)).pack(side='left')
+            outer, from_=0.5, to=3600, increment=0.5,
+            textvariable=self._interval, width=8,
+            bg=ENTRY_BG, fg=TEXT, relief='solid', bd=1,
+            font=('Helvetica', 10), buttonbackground=BTN_BG,
+        ).pack(side='left')
+        tk.Label(outer, text='秒', bg=BG, fg=TEXT,
+                 font=('Helvetica', 10)).pack(side='left', padx=(4, 0))
         self._interval.trace_add('write', lambda *_: self._save_if_valid())
 
         presets = [
@@ -111,61 +119,63 @@ class App(tk.Tk):
             ('4分', 240), ('5分', 300), ('10分', 600), ('30分', 1800),
         ]
         for r in range(2):
-            fr = tk.Frame(p, bg=PANEL)
-            fr.pack(fill='x', pady=1)
+            fr = tk.Frame(self, bg=BG)
+            fr.pack(fill='x', padx=12, pady=1)
             for lbl, val in presets[r * 4:(r + 1) * 4]:
                 tk.Button(
-                    fr, text=lbl, bg=BTN, fg=TEXT, relief='flat',
-                    padx=7, pady=3, font=('Helvetica', 9),
-                    activebackground=ACCENT, activeforeground='white', cursor='hand2',
+                    fr, text=lbl, bg=BTN_BG, fg=TEXT,
+                    relief='solid', bd=1, padx=6, pady=2, font=('Helvetica', 9),
+                    cursor='hand2',
                     command=lambda v=val: self._interval.set(str(float(v))),
-                ).pack(side='left', padx=2)
+                ).pack(side='left', padx=(0, 4))
 
     def _build_speed(self) -> None:
-        p = self._panel('移動速度')
-        row = tk.Frame(p, bg=PANEL)
-        row.pack(fill='x', pady=(0, 2))
+        row = tk.Frame(self, bg=BG)
+        row.pack(fill='x', padx=12, pady=3)
         self._duration = tk.StringVar()
         tk.Spinbox(
-            row, from_=0.0, to=5.0, increment=0.1, textvariable=self._duration,
-            width=10, bg=BTN, fg=TEXT, insertbackground=TEXT, buttonbackground=BTN,
-            relief='flat', font=('Helvetica', 11),
-        ).pack(side='left', padx=4)
-        tk.Label(row, text='秒', fg=TEXT, bg=PANEL, font=('Helvetica', 10)).pack(side='left')
+            row, from_=0.0, to=5.0, increment=0.1,
+            textvariable=self._duration, width=8,
+            bg=ENTRY_BG, fg=TEXT, relief='solid', bd=1,
+            font=('Helvetica', 10), buttonbackground=BTN_BG,
+        ).pack(side='left')
+        tk.Label(row, text='秒', bg=BG, fg=TEXT,
+                 font=('Helvetica', 10)).pack(side='left', padx=(4, 0))
         self._duration.trace_add('write', lambda *_: self._save_if_valid())
 
     def _build_controls(self) -> None:
-        f = tk.Frame(self, bg=BG, pady=8)
-        f.pack()
+        f = tk.Frame(self, bg=BG)
+        f.pack(pady=(12, 6))
         self._start_btn = tk.Button(
-            f, text='START', bg=ACCENT, fg='white',
-            font=('Helvetica', 13, 'bold'), padx=28, pady=7, relief='flat',
-            activebackground='#C73652', activeforeground='white',
-            cursor='hand2', command=self._on_start,
+            f, text='START', bg=START_BG, fg='white',
+            font=('Helvetica', 12, 'bold'), padx=30, pady=6,
+            relief='flat', cursor='hand2', command=self._on_start,
+            activebackground='#3A7BC8', activeforeground='white',
         )
-        self._start_btn.pack(side='left', padx=10)
+        self._start_btn.pack(side='left', padx=6)
         self._stop_btn = tk.Button(
-            f, text='STOP', bg=STOP_COLOR, fg=TEXT,
-            font=('Helvetica', 13, 'bold'), padx=28, pady=7, relief='flat',
-            activebackground='#6A6A8A', activeforeground='white',
-            cursor='hand2', command=self._on_stop, state='disabled',
+            f, text='STOP', bg=STOP_BG, fg=TEXT,
+            font=('Helvetica', 12, 'bold'), padx=30, pady=6,
+            relief='solid', bd=1, cursor='hand2', command=self._on_stop,
+            state='disabled',
         )
-        self._stop_btn.pack(side='left', padx=10)
+        self._stop_btn.pack(side='left', padx=6)
 
     def _build_status(self) -> None:
-        f = tk.Frame(self, bg=PANEL, pady=5)
-        f.pack(fill='x', padx=10)
+        tk.Frame(self, bg=BORDER, height=1).pack(fill='x', padx=12)
+        f = tk.Frame(self, bg=BG)
+        f.pack(fill='x', padx=12, pady=4)
         self._status = tk.StringVar(value='待機中')
-        tk.Label(f, textvariable=self._status, fg=TEXT, bg=PANEL,
-                 font=('Helvetica', 10), wraplength=400, justify='center').pack()
+        tk.Label(f, textvariable=self._status, bg=BG, fg=TEXT,
+                 font=('Helvetica', 10), anchor='center').pack(fill='x')
 
     def _build_footer(self) -> None:
         f = tk.Frame(self, bg=BG)
-        f.pack(fill='x', padx=10, pady=(3, 3))
-        tk.Label(f, text='緊急停止: マウスを画面左上コーナーへ移動',
-                 fg='#666688', bg=BG, font=('Helvetica', 9)).pack(side='left')
+        f.pack(fill='x', padx=12, pady=(0, 6))
+        tk.Label(f, text='緊急停止: 画面左上コーナーへ移動',
+                 bg=BG, fg=MUTED, font=('Helvetica', 8)).pack(side='left')
         tk.Label(f, text=f'v{VERSION}',
-                 fg='#444466', bg=BG, font=('Helvetica', 8)).pack(side='right')
+                 bg=BG, fg=MUTED, font=('Helvetica', 8)).pack(side='right')
 
     # ── logic ─────────────────────────────────────────────────────────────
 
@@ -203,7 +213,7 @@ class App(tk.Tk):
 
     def _do_capture(self, label: str, xv: tk.StringVar, yv: tk.StringVar) -> None:
         for i in range(3, 0, -1):
-            self.after(0, lambda i=i: self._status.set(f'{label} を{i}秒後に取得します… マウスを移動してください'))
+            self.after(0, lambda i=i: self._status.set(f'{label} を{i}秒後に取得します…'))
             time.sleep(1)
         x, y = pyautogui.position()
         self.after(0, lambda: xv.set(str(x)))
