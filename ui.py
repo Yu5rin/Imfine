@@ -22,7 +22,7 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title('Mouser')
-        self.geometry('440x490')
+        self.geometry('440x455')
         self.resizable(False, False)
         self.configure(bg=BG)
         try:
@@ -153,7 +153,7 @@ class App(tk.Tk):
         self._stop_btn.pack(side='left', padx=10)
 
     def _build_status(self) -> None:
-        f = tk.Frame(self, bg=PANEL, pady=8)
+        f = tk.Frame(self, bg=PANEL, pady=5)
         f.pack(fill='x', padx=10)
         self._status = tk.StringVar(value='待機中')
         tk.Label(f, textvariable=self._status, fg=TEXT, bg=PANEL,
@@ -161,7 +161,7 @@ class App(tk.Tk):
 
     def _build_footer(self) -> None:
         f = tk.Frame(self, bg=BG)
-        f.pack(fill='x', padx=10, pady=(4, 4))
+        f.pack(fill='x', padx=10, pady=(3, 3))
         tk.Label(f, text='緊急停止: マウスを画面左上コーナーへ移動',
                  fg='#666688', bg=BG, font=('Helvetica', 9)).pack(side='left')
         tk.Label(f, text=f'v{VERSION}',
