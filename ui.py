@@ -7,6 +7,8 @@ import pyautogui
 import settings
 from controller import Controller
 
+VERSION = '1.1.0'
+
 BG = '#1A1A2E'
 PANEL = '#16213E'
 ACCENT = '#E94560'
@@ -66,21 +68,6 @@ class App(tk.Tk):
         outer.pack(fill='x', padx=10, pady=2)
         tk.Label(outer, text=title, fg=ACCENT, bg=PANEL, font=('Helvetica', 10, 'bold')).pack(anchor='w', pady=(0, 3))
         return outer
-
-    def _build_header(self) -> None:
-        h = tk.Frame(self, bg=BG, pady=10)
-        h.pack(fill='x')
-        try:
-            img = tk.PhotoImage(file='icon.png').subsample(6)
-            lbl = tk.Label(h, image=img, bg=BG)
-            lbl.image = img
-            lbl.pack(side='left', padx=(20, 8))
-        except Exception:
-            tk.Label(h, text='M', font=('Helvetica', 26, 'bold'), bg=BG, fg=ACCENT).pack(side='left', padx=(20, 8))
-        tf = tk.Frame(h, bg=BG)
-        tf.pack(side='left')
-        tk.Label(tf, text='Mouser', font=('Helvetica', 22, 'bold'), fg=ACCENT, bg=BG).pack(anchor='w')
-        tk.Label(tf, text='マウス自動移動ツール', font=('Helvetica', 9), fg=TEXT, bg=BG).pack(anchor='w')
 
     def _build_coords(self) -> None:
         p = self._panel('座標設定')
@@ -173,10 +160,12 @@ class App(tk.Tk):
                  font=('Helvetica', 10), wraplength=400, justify='center').pack()
 
     def _build_footer(self) -> None:
-        tk.Label(
-            self, text='緊急停止: マウスを画面左上コーナーへ移動',
-            fg='#666688', bg=BG, font=('Helvetica', 9),
-        ).pack(pady=(4, 4))
+        f = tk.Frame(self, bg=BG)
+        f.pack(fill='x', padx=10, pady=(4, 4))
+        tk.Label(f, text='緊急停止: マウスを画面左上コーナーへ移動',
+                 fg='#666688', bg=BG, font=('Helvetica', 9)).pack(side='left')
+        tk.Label(f, text=f'v{VERSION}',
+                 fg='#444466', bg=BG, font=('Helvetica', 8)).pack(side='right')
 
     # ── logic ─────────────────────────────────────────────────────────────
 
