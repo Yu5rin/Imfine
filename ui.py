@@ -20,11 +20,14 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title('Mouser')
-        self.geometry('440x600')
+        self.geometry('440x490')
         self.resizable(False, False)
         self.configure(bg=BG)
         try:
             self.iconbitmap('icon.ico')
+            img = tk.PhotoImage(file='icon.png')
+            self.iconphoto(True, img)
+            self._icon_img = img
         except Exception:
             pass
 
@@ -43,8 +46,6 @@ class App(tk.Tk):
     # ── layout ────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        self._build_header()
-        self._sep()
         self._build_coords()
         self._sep()
         self._build_interval()
@@ -175,7 +176,7 @@ class App(tk.Tk):
         tk.Label(
             self, text='緊急停止: マウスを画面左上コーナーへ移動',
             fg='#666688', bg=BG, font=('Helvetica', 9),
-        ).pack(pady=5)
+        ).pack(pady=(4, 4))
 
     # ── logic ─────────────────────────────────────────────────────────────
 
