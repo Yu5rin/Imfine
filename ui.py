@@ -7,6 +7,8 @@ import pyautogui
 import settings
 from controller import Controller
 
+VERSION = '1.1.0'
+
 BG = '#1A1A2E'
 PANEL = '#16213E'
 ACCENT = '#E94560'
@@ -20,11 +22,14 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title('Mouser')
-        self.geometry('440x600')
+        self.geometry('440x455')
         self.resizable(False, False)
         self.configure(bg=BG)
         try:
             self.iconbitmap('icon.ico')
+            img = tk.PhotoImage(file='icon.png')
+            self.iconphoto(True, img)
+            self._icon_img = img
         except Exception:
             pass
 
@@ -43,8 +48,6 @@ class App(tk.Tk):
     # ── layout ────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        self._build_header()
-        self._sep()
         self._build_coords()
         self._sep()
         self._build_interval()
@@ -65,21 +68,6 @@ class App(tk.Tk):
         outer.pack(fill='x', padx=10, pady=2)
         tk.Label(outer, text=title, fg=ACCENT, bg=PANEL, font=('Helvetica', 10, 'bold')).pack(anchor='w', pady=(0, 3))
         return outer
-
-    def _build_header(self) -> None:
-        h = tk.Frame(self, bg=BG, pady=10)
-        h.pack(fill='x')
-        try:
-            img = tk.PhotoImage(file='icon.png').subsample(6)
-            lbl = tk.Label(h, image=img, bg=BG)
-            lbl.image = img
-            lbl.pack(side='left', padx=(20, 8))
-        except Exception:
-            tk.Label(h, text='M', font=('Helvetica', 26, 'bold'), bg=BG, fg=ACCENT).pack(side='left', padx=(20, 8))
-        tf = tk.Frame(h, bg=BG)
-        tf.pack(side='left')
-        tk.Label(tf, text='Mouser', font=('Helvetica', 22, 'bold'), fg=ACCENT, bg=BG).pack(anchor='w')
-        tk.Label(tf, text='マウス自動移動ツール', font=('Helvetica', 9), fg=TEXT, bg=BG).pack(anchor='w')
 
     def _build_coords(self) -> None:
         p = self._panel('座標設定')
@@ -165,17 +153,19 @@ class App(tk.Tk):
         self._stop_btn.pack(side='left', padx=10)
 
     def _build_status(self) -> None:
-        f = tk.Frame(self, bg=PANEL, pady=8)
+        f = tk.Frame(self, bg=PANEL, pady=5)
         f.pack(fill='x', padx=10)
         self._status = tk.StringVar(value='待機中')
         tk.Label(f, textvariable=self._status, fg=TEXT, bg=PANEL,
                  font=('Helvetica', 10), wraplength=400, justify='center').pack()
 
     def _build_footer(self) -> None:
-        tk.Label(
-            self, text='緊急停止: マウスを画面左上コーナーへ移動',
-            fg='#666688', bg=BG, font=('Helvetica', 9),
-        ).pack(pady=5)
+        f = tk.Frame(self, bg=BG)
+        f.pack(fill='x', padx=10, pady=(3, 3))
+        tk.Label(f, text='緊急停止: マウスを画面左上コーナーへ移動',
+                 fg='#666688', bg=BG, font=('Helvetica', 9)).pack(side='left')
+        tk.Label(f, text=f'v{VERSION}',
+                 fg='#444466', bg=BG, font=('Helvetica', 8)).pack(side='right')
 
     # ── logic ─────────────────────────────────────────────────────────────
 
