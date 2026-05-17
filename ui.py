@@ -24,7 +24,7 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title('Mouser')
-        self.geometry('400x430')
+        self.geometry('360x375')
         self.resizable(False, False)
         self.configure(bg=BG)
         try:
@@ -143,17 +143,17 @@ class App(tk.Tk):
 
     def _build_controls(self) -> None:
         f = tk.Frame(self, bg=BG)
-        f.pack(pady=(12, 6))
+        f.pack(pady=(10, 6))
         self._start_btn = tk.Button(
             f, text='START', bg=START_BG, fg='white',
-            font=('Helvetica', 12, 'bold'), padx=30, pady=6,
+            font=('Helvetica', 12, 'bold'), padx=28, pady=6,
             relief='flat', cursor='hand2', command=self._on_start,
             activebackground='#3A7BC8', activeforeground='white',
         )
         self._start_btn.pack(side='left', padx=6)
         self._stop_btn = tk.Button(
             f, text='STOP', bg=STOP_BG, fg=TEXT,
-            font=('Helvetica', 12, 'bold'), padx=30, pady=6,
+            font=('Helvetica', 12, 'bold'), padx=28, pady=6,
             relief='solid', bd=1, cursor='hand2', command=self._on_stop,
             state='disabled',
         )
@@ -169,7 +169,7 @@ class App(tk.Tk):
 
     def _build_footer(self) -> None:
         f = tk.Frame(self, bg=BG)
-        f.pack(fill='x', padx=12, pady=(0, 6))
+        f.pack(fill='x', padx=12, pady=(0, 5))
         tk.Label(f, text='緊急停止: 画面左上コーナーへ移動',
                  bg=BG, fg=MUTED, font=('Helvetica', 8)).pack(side='left')
         tk.Label(f, text=f'v{VERSION}',
