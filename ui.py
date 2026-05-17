@@ -1,8 +1,16 @@
+import os
+import sys
 import threading
 import time
 import tkinter as tk
 
 import pyautogui
+
+
+def _res(name: str) -> str:
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, name)
+    return name
 
 import settings
 from controller import Controller
@@ -39,8 +47,8 @@ class App(tk.Tk):
         self.geometry('360x375')
         self.resizable(False, False)
         try:
-            self.iconbitmap('icon.ico')
-            img = tk.PhotoImage(file='icon.png')
+            self.iconbitmap(_res('icon.ico'))
+            img = tk.PhotoImage(file=_res('icon.png'))
             self.iconphoto(True, img)
             self._icon_img = img
         except Exception:
