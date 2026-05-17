@@ -24,7 +24,7 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title('Mouser')
-        self.geometry('400x430')
+        self.geometry('360x375')
         self.resizable(False, False)
         self.configure(bg=BG)
         try:
