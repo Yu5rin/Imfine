@@ -9,6 +9,7 @@ DEFAULTS: dict = {
     'y2': 300,
     'interval': 60.0,
     'duration': 0.5,
+    'theme': 'light',
 }
 
 
