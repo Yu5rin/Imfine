@@ -1,8 +1,32 @@
 import threading
 import time
 
+from pynput import mouse as _mouse
+
 from mover import Mover
-from monitor import Monitor
+
+
+class _Monitor:
+    def __init__(self, on_user_move) -> None:
+        self._on_user_move = on_user_move
+        self._listener: _mouse.Listener | None = None
+        self.active = False
+
+    def start(self) -> None:
+        self.active = True
+        self._listener = _mouse.Listener(on_move=self._handle)
+        self._listener.daemon = True
+        self._listener.start()
+
+    def stop(self) -> None:
+        self.active = False
+        if self._listener:
+            self._listener.stop()
+            self._listener = None
+
+    def _handle(self, x: int, y: int) -> None:
+        if self.active and self._on_user_move:
+            self._on_user_move()
 
 
 class Controller:
@@ -26,7 +50,7 @@ class Controller:
         self._mover.on_emergency_stop = self._on_emergency_stop
         self._mover.on_countdown = self._on_mover_countdown
 
-        self._monitor = Monitor(self._on_user_move)
+        self._monitor = _Monitor(self._on_user_move)
 
     def start(self, x1: int, y1: int, x2: int, y2: int, duration: float, interval: float) -> None:
         if self.state in (self.RUNNING, self.PAUSED):
