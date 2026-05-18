@@ -24,6 +24,7 @@ class Controller:
         self._mover.on_after_move = lambda: setattr(self, '_auto_moving', False)
         self._mover.on_count = self._on_count
         self._mover.on_emergency_stop = self._on_emergency_stop
+        self._mover.on_countdown = self._on_mover_countdown
 
         self._monitor = Monitor(self._on_user_move)
 
@@ -34,7 +35,7 @@ class Controller:
         self.state = self.RUNNING
         self._mover.start(x1, y1, x2, y2, duration, interval)
         self._monitor.start()
-        self._notify('動作中… 往復回数: 0')
+        self._notify(f'移動まであと {int(interval)}秒')
 
     def stop(self) -> None:
         self._mover.stop()
@@ -42,6 +43,10 @@ class Controller:
         self._cancel_countdown()
         self.state = self.STOPPED
         self._notify('停止しました')
+
+    def _on_mover_countdown(self, remaining: float) -> None:
+        if self.state == self.RUNNING:
+            self._notify(f'移動まであと {int(remaining)}秒')
 
     def _on_count(self, count: int) -> None:
         if self.state == self.RUNNING:
