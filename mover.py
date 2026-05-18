@@ -11,15 +11,18 @@ class Mover:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
+        self._skip_next_wait = False
         self.count = 0
         self.on_count = None
         self.on_emergency_stop = None
         self.on_before_move = None
         self.on_after_move = None
+        self.on_countdown = None
 
     def start(self, x1: int, y1: int, x2: int, y2: int, duration: float, interval: float) -> None:
         self._stop_event.clear()
         self._pause_event.clear()
+        self._skip_next_wait = False
         self.count = 0
         self._thread = threading.Thread(
             target=self._run,
@@ -33,6 +36,7 @@ class Mover:
         self._pause_event.clear()
 
     def pause(self) -> None:
+        self._skip_next_wait = True
         self._pause_event.set()
 
     def resume(self) -> None:
@@ -45,6 +49,30 @@ class Mover:
             if self._pause_event.is_set():
                 time.sleep(0.05)
                 continue
+
+            # Wait first (skip after resuming from user-pause)
+            if not self._skip_next_wait:
+                elapsed = 0.0
+                last_shown = -1
+                while elapsed < interval:
+                    if self._stop_event.is_set():
+                        return
+                    if self._pause_event.is_set():
+                        break
+                    remaining = interval - elapsed
+                    cur = int(remaining)
+                    if cur != last_shown:
+                        if self.on_countdown:
+                            self.on_countdown(remaining)
+                        last_shown = cur
+                    time.sleep(0.05)
+                    elapsed += 0.05
+                if self._stop_event.is_set() or self._pause_event.is_set():
+                    continue
+            else:
+                self._skip_next_wait = False
+
+            # Move
             try:
                 if self.on_before_move:
                     self.on_before_move()
@@ -62,8 +90,3 @@ class Mover:
             idx ^= 1
             if self.on_count:
                 self.on_count(self.count)
-
-            elapsed = 0.0
-            while elapsed < interval and not self._stop_event.is_set() and not self._pause_event.is_set():
-                time.sleep(0.05)
-                elapsed += 0.05

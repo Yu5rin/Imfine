@@ -1,4 +1,5 @@
 pyautogui
 pynput
 pillow
+pystray
 pyinstaller
