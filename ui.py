@@ -1,21 +1,25 @@
+import datetime
 import os
 import sys
 import threading
 import time
 import tkinter as tk
+from tkinter import messagebox
 
 import pyautogui
 
-
-def _res(name: str) -> str:
-    if hasattr(sys, '_MEIPASS'):
-        return os.path.join(sys._MEIPASS, name)
-    return name
+try:
+    import pystray
+    from PIL import Image as PILImage
+    _HAS_TRAY = True
+except ImportError:
+    _HAS_TRAY = False
 
 import settings
 from controller import Controller
 
-VERSION = '1.2.0'
+
+VERSION = '1.3.0'
 
 THEMES: dict = {
     'light': {
@@ -40,11 +44,17 @@ THEMES: dict = {
 START_BG = '#4A90D9'
 
 
+def _res(name: str) -> str:
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, name)
+    return name
+
+
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title('Mouser')
-        self.geometry('360x375')
+        self.geometry('360x430')
         self.resizable(False, False)
         try:
             self.iconbitmap(_res('icon.ico'))
@@ -57,8 +67,11 @@ class App(tk.Tk):
         self._loading = False
         self._cfg = settings.load()
         self._dark = self._cfg.get('theme', 'light') == 'dark'
+        self._tray_icon = None
+        self._going_to_tray = False
+        self._stop_triggered = False
+        self._current_interval = settings.DEFAULTS['interval']
 
-        # テーマ対象ウィジェット登録用
         self._tw: dict[str, list] = {
             'bg_frames': [],
             'labels':    [],
@@ -67,6 +80,7 @@ class App(tk.Tk):
             'spinboxes': [],
             'borders':   [],
             'btns':      [],
+            'checks':    [],
         }
 
         self._build()
@@ -81,6 +95,10 @@ class App(tk.Tk):
             'on_emergency': lambda: self.after(0, self._on_emergency_ui),
         })
 
+        self.protocol('WM_DELETE_WINDOW', self._on_close)
+        self.bind('<Unmap>', self._on_unmap)
+        self.after(1000, self._check_stop_timer)
+
     # ── layout ────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
@@ -93,6 +111,9 @@ class App(tk.Tk):
 
         self._section('移動速度')
         self._build_speed()
+
+        self._section('停止時刻')
+        self._build_stop_timer()
 
         self._build_controls()
         self._build_status()
@@ -194,6 +215,49 @@ class App(tk.Tk):
         self._tw['labels'].append(ul)
         self._duration.trace_add('write', lambda *_: self._save_if_valid())
 
+    def _build_stop_timer(self) -> None:
+        outer = tk.Frame(self)
+        outer.pack(fill='x', padx=12, pady=3)
+        self._tw['bg_frames'].append(outer)
+
+        self._stop_timer_enabled = tk.BooleanVar(value=False)
+        cb = tk.Checkbutton(
+            outer, variable=self._stop_timer_enabled,
+            text='有効', font=('Helvetica', 10),
+            command=self._on_stop_timer_toggle,
+        )
+        cb.pack(side='left')
+        self._tw['checks'].append(cb)
+
+        self._stop_hour = tk.StringVar(value='17')
+        self._stop_min = tk.StringVar(value='0')
+
+        self._stop_hour_sp = tk.Spinbox(
+            outer, from_=0, to=23, increment=1,
+            textvariable=self._stop_hour, width=4,
+            relief='solid', bd=1, font=('Helvetica', 10),
+            state='disabled',
+        )
+        self._stop_hour_sp.pack(side='left', padx=(8, 2))
+        self._tw['spinboxes'].append(self._stop_hour_sp)
+
+        colon = tk.Label(outer, text=':', font=('Helvetica', 10))
+        colon.pack(side='left')
+        self._tw['labels'].append(colon)
+
+        self._stop_min_sp = tk.Spinbox(
+            outer, from_=0, to=59, increment=1,
+            textvariable=self._stop_min, width=4,
+            relief='solid', bd=1, font=('Helvetica', 10),
+            state='disabled',
+        )
+        self._stop_min_sp.pack(side='left', padx=(2, 0))
+        self._tw['spinboxes'].append(self._stop_min_sp)
+
+        self._stop_hour.trace_add('write', lambda *_: self._save_if_valid())
+        self._stop_min.trace_add('write', lambda *_: self._save_if_valid())
+        self._stop_timer_enabled.trace_add('write', lambda *_: self._save_if_valid())
+
     def _build_controls(self) -> None:
         f = tk.Frame(self)
         f.pack(pady=(10, 6))
@@ -269,6 +333,10 @@ class App(tk.Tk):
         for w in self._tw['btns']:      w.configure(bg=t['BTN_BG'], fg=t['TEXT'],
                                                      activebackground=t['ENTRY_BG'],
                                                      activeforeground=t['TEXT'])
+        for w in self._tw['checks']:    w.configure(bg=t['BG'], fg=t['TEXT'],
+                                                     selectcolor=t['ENTRY_BG'],
+                                                     activebackground=t['BG'],
+                                                     activeforeground=t['TEXT'])
         self._stop_btn.configure(bg=t['STOP_BG'], fg=t['TEXT'],
                                   activebackground=t['ENTRY_BG'],
                                   activeforeground=t['TEXT'])
@@ -292,6 +360,15 @@ class App(tk.Tk):
         self._by.set(str(c['y2']))
         self._interval.set(str(c['interval']))
         self._duration.set(str(c['duration']))
+        self._stop_timer_enabled.set(bool(c.get('stop_timer_enabled', False)))
+        self._stop_hour.set(str(c.get('stop_hour', 17)))
+        self._stop_min.set(str(c.get('stop_min', 0)))
+        self._on_stop_timer_toggle()
+
+    def _on_stop_timer_toggle(self) -> None:
+        state = 'normal' if self._stop_timer_enabled.get() else 'disabled'
+        self._stop_hour_sp.configure(state=state)
+        self._stop_min_sp.configure(state=state)
 
     def _get_cfg(self) -> dict | None:
         try:
@@ -303,8 +380,11 @@ class App(tk.Tk):
                 'interval': float(self._interval.get()),
                 'duration': float(self._duration.get()),
                 'theme': 'dark' if self._dark else 'light',
+                'stop_timer_enabled': self._stop_timer_enabled.get(),
+                'stop_hour': int(self._stop_hour.get()),
+                'stop_min': int(self._stop_min.get()),
             }
-        except ValueError:
+        except (ValueError, AttributeError):
             return None
 
     def _save_if_valid(self) -> None:
@@ -322,6 +402,9 @@ class App(tk.Tk):
             self.after(0, lambda i=i: self._status.set(f'{label} を{i}秒後に取得します…'))
             time.sleep(1)
         x, y = pyautogui.position()
+        if x == 0 and y == 0:
+            self.after(0, lambda: self._status.set(f'{label} の取得をキャンセル: (0,0) は設定できません'))
+            return
         self.after(0, lambda: xv.set(str(x)))
         self.after(0, lambda: yv.set(str(y)))
         self.after(0, lambda: self._status.set(f'{label} を取得しました: ({x}, {y})'))
@@ -331,6 +414,14 @@ class App(tk.Tk):
         if not cfg:
             self._status.set('入力値を確認してください')
             return
+        if cfg['x1'] == 0 and cfg['y1'] == 0:
+            self._status.set('地点 A に (0, 0) は設定できません')
+            return
+        if cfg['x2'] == 0 and cfg['y2'] == 0:
+            self._status.set('地点 B に (0, 0) は設定できません')
+            return
+        self._stop_triggered = False
+        self._current_interval = cfg['interval']
         self._ctrl.start(cfg['x1'], cfg['y1'], cfg['x2'], cfg['y2'], cfg['duration'], cfg['interval'])
         self._start_btn.config(state='disabled')
         self._stop_btn.config(state='normal')
@@ -343,3 +434,77 @@ class App(tk.Tk):
     def _on_emergency_ui(self) -> None:
         self._start_btn.config(state='normal')
         self._stop_btn.config(state='disabled')
+
+    def _check_stop_timer(self) -> None:
+        if (self._stop_timer_enabled.get()
+                and not self._stop_triggered
+                and hasattr(self, '_ctrl')
+                and self._ctrl.state in (Controller.RUNNING, Controller.PAUSED)):
+            try:
+                now = datetime.datetime.now()
+                h = int(self._stop_hour.get())
+                m = int(self._stop_min.get())
+                stop_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                trigger_dt = stop_dt - datetime.timedelta(seconds=self._current_interval)
+                if now >= trigger_dt:
+                    self._stop_triggered = True
+                    self._on_stop()
+            except (ValueError, AttributeError):
+                pass
+        self.after(1000, self._check_stop_timer)
+
+    # ── window events ─────────────────────────────────────────────────────
+
+    def _on_close(self) -> None:
+        if hasattr(self, '_ctrl') and self._ctrl.state in (Controller.RUNNING, Controller.PAUSED):
+            if not messagebox.askyesno('Mouser', '動作中です。終了しますか？'):
+                return
+        if self._tray_icon:
+            self._tray_icon.stop()
+            self._tray_icon = None
+        if hasattr(self, '_ctrl'):
+            self._ctrl.stop()
+        self.destroy()
+
+    def _on_unmap(self, event: tk.Event) -> None:
+        if event.widget is self and not self._going_to_tray:
+            self.after(50, self._check_iconify)
+
+    def _check_iconify(self) -> None:
+        if self.wm_state() == 'iconic':
+            self._minimize_to_tray()
+
+    def _minimize_to_tray(self) -> None:
+        if not _HAS_TRAY:
+            return
+        self._going_to_tray = True
+        self.withdraw()
+        self._going_to_tray = False
+        if self._tray_icon is not None:
+            return
+        try:
+            img = PILImage.open(_res('icon.png'))
+        except Exception:
+            img = PILImage.new('RGBA', (64, 64), '#4A90D9')
+        menu = pystray.Menu(
+            pystray.MenuItem('タスクトレイから出す', self._tray_restore, default=True),
+            pystray.MenuItem('終了', self._tray_quit),
+        )
+        self._tray_icon = pystray.Icon('Mouser', img, 'Mouser', menu)
+        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+
+    def _tray_restore(self, icon=None, item=None) -> None:
+        icon_ref = self._tray_icon
+        self._tray_icon = None
+        if icon_ref:
+            icon_ref.stop()
+        self.after(0, self.deiconify)
+
+    def _tray_quit(self, icon=None, item=None) -> None:
+        icon_ref = self._tray_icon
+        self._tray_icon = None
+        if icon_ref:
+            icon_ref.stop()
+        if hasattr(self, '_ctrl'):
+            self._ctrl.stop()
+        self.after(0, self.destroy)

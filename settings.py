@@ -10,6 +10,9 @@ DEFAULTS: dict = {
     'interval': 60.0,
     'duration': 0.5,
     'theme': 'light',
+    'stop_timer_enabled': False,
+    'stop_hour': 17,
+    'stop_min': 0,
 }
 
 
