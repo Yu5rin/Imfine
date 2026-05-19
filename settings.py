@@ -13,6 +13,7 @@ DEFAULTS: dict = {
     'stop_timer_enabled': False,
     'stop_hour': 17,
     'stop_min': 0,
+    'tray_minimize': True,
 }
 
 
