@@ -34,7 +34,6 @@ class Controller:
     RUNNING = 'running'
     PAUSED = 'paused'
     STOPPED = 'stopped'
-    EMERGENCY = 'emergency'
 
     def __init__(self, ui: dict) -> None:
         self._ui = ui
@@ -48,7 +47,6 @@ class Controller:
         self._mover.on_before_move = lambda: setattr(self, '_auto_moving', True)
         self._mover.on_after_move = lambda: setattr(self, '_auto_moving', False)
         self._mover.on_count = self._on_count
-        self._mover.on_emergency_stop = self._on_emergency_stop
         self._mover.on_countdown = self._on_mover_countdown
 
         self._monitor = _Monitor(self._on_user_move)
@@ -80,20 +78,11 @@ class Controller:
     def _on_user_move(self) -> None:
         if self._auto_moving:
             return
-        # Always update timestamp — this resets the countdown without a new thread
         self._last_user_move = time.monotonic()
         if self.state == self.RUNNING:
             self.state = self.PAUSED
             self._mover.pause()
-            self._start_countdown()  # one thread per RUNNING→PAUSED transition only
-
-    def _on_emergency_stop(self) -> None:
-        self._monitor.stop()
-        self._cancel_countdown()
-        self.state = self.EMERGENCY
-        self._notify('緊急停止しました（左上コーナー検知）')
-        if cb := self._ui.get('on_emergency'):
-            cb()
+            self._start_countdown()
 
     def _start_countdown(self) -> None:
         self._countdown_gen += 1
