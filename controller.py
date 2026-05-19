@@ -1,8 +1,32 @@
 import threading
 import time
 
+from pynput import mouse as _mouse
+
 from mover import Mover
-from monitor import Monitor
+
+
+class _Monitor:
+    def __init__(self, on_user_move) -> None:
+        self._on_user_move = on_user_move
+        self._listener: _mouse.Listener | None = None
+        self.active = False
+
+    def start(self) -> None:
+        self.active = True
+        self._listener = _mouse.Listener(on_move=self._handle)
+        self._listener.daemon = True
+        self._listener.start()
+
+    def stop(self) -> None:
+        self.active = False
+        if self._listener:
+            self._listener.stop()
+            self._listener = None
+
+    def _handle(self, x: int, y: int) -> None:
+        if self.active and self._on_user_move:
+            self._on_user_move()
 
 
 class Controller:
@@ -18,6 +42,7 @@ class Controller:
         self._interval = 60.0
         self._auto_moving = False
         self._countdown_gen = 0
+        self._last_user_move = 0.0
 
         self._mover = Mover()
         self._mover.on_before_move = lambda: setattr(self, '_auto_moving', True)
@@ -26,7 +51,7 @@ class Controller:
         self._mover.on_emergency_stop = self._on_emergency_stop
         self._mover.on_countdown = self._on_mover_countdown
 
-        self._monitor = Monitor(self._on_user_move)
+        self._monitor = _Monitor(self._on_user_move)
 
     def start(self, x1: int, y1: int, x2: int, y2: int, duration: float, interval: float) -> None:
         if self.state in (self.RUNNING, self.PAUSED):
@@ -55,11 +80,12 @@ class Controller:
     def _on_user_move(self) -> None:
         if self._auto_moving:
             return
+        # Always update timestamp — this resets the countdown without a new thread
+        self._last_user_move = time.monotonic()
         if self.state == self.RUNNING:
             self.state = self.PAUSED
             self._mover.pause()
-        if self.state == self.PAUSED:
-            self._start_countdown()
+            self._start_countdown()  # one thread per RUNNING→PAUSED transition only
 
     def _on_emergency_stop(self) -> None:
         self._monitor.stop()
@@ -78,13 +104,15 @@ class Controller:
         self._countdown_gen += 1
 
     def _countdown_loop(self, gen: int) -> None:
-        remaining = self._interval
-        while remaining > 0:
+        while True:
             if self._countdown_gen != gen:
                 return
-            self._notify(f'一時停止中 / 再開まであと {int(remaining)}秒')
+            elapsed = time.monotonic() - self._last_user_move
+            remaining = self._interval - elapsed
+            if remaining <= 0:
+                break
+            self._notify(f'一時停止中 / 再開まであと {int(remaining) + 1}秒')
             time.sleep(0.5)
-            remaining -= 0.5
         if self._countdown_gen == gen and self.state == self.PAUSED:
             self.state = self.RUNNING
             self._mover.resume()
