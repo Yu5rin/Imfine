@@ -8,13 +8,6 @@ from tkinter import messagebox
 
 import pyautogui
 
-try:
-    import pystray
-    from PIL import Image as PILImage
-    _HAS_TRAY = True
-except ImportError:
-    _HAS_TRAY = False
-
 import settings
 from controller import Controller
 
@@ -71,6 +64,7 @@ class App(tk.Tk):
         self._going_to_tray = False
         self._stop_triggered = False
         self._current_interval = settings.DEFAULTS['interval']
+        self._tray_minimize: tk.BooleanVar  # set in _build_footer
 
         self._tw: dict[str, list] = {
             'bg_frames': [],
@@ -316,6 +310,15 @@ class App(tk.Tk):
         self._toggle_btn.pack(side='right', padx=4)
         self._tw['muted'].append(self._toggle_btn)
 
+        self._tray_minimize = tk.BooleanVar(value=True)
+        tray_cb = tk.Checkbutton(
+            f, variable=self._tray_minimize,
+            text='トレイ', font=('Helvetica', 8),
+            command=self._save_if_valid,
+        )
+        tray_cb.pack(side='right', padx=(0, 2))
+        self._tw['checks'].append(tray_cb)
+
     # ── theme ─────────────────────────────────────────────────────────────
 
     def _apply_theme(self) -> None:
@@ -363,6 +366,7 @@ class App(tk.Tk):
         self._stop_timer_enabled.set(bool(c.get('stop_timer_enabled', False)))
         self._stop_hour.set(str(c.get('stop_hour', 17)))
         self._stop_min.set(str(c.get('stop_min', 0)))
+        self._tray_minimize.set(bool(c.get('tray_minimize', True)))
         self._on_stop_timer_toggle()
 
     def _on_stop_timer_toggle(self) -> None:
@@ -383,6 +387,7 @@ class App(tk.Tk):
                 'stop_timer_enabled': self._stop_timer_enabled.get(),
                 'stop_hour': int(self._stop_hour.get()),
                 'stop_min': int(self._stop_min.get()),
+                'tray_minimize': self._tray_minimize.get(),
             }
         except (ValueError, AttributeError):
             return None
@@ -471,11 +476,14 @@ class App(tk.Tk):
             self.after(50, self._check_iconify)
 
     def _check_iconify(self) -> None:
-        if self.wm_state() == 'iconic':
+        if self.wm_state() == 'iconic' and self._tray_minimize.get():
             self._minimize_to_tray()
 
     def _minimize_to_tray(self) -> None:
-        if not _HAS_TRAY:
+        try:
+            import pystray
+            from PIL import Image as PILImage
+        except ImportError:
             return
         self._going_to_tray = True
         self.withdraw()
