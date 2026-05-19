@@ -12,7 +12,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.3.0'
+VERSION = '1.3.1'
 
 THEMES: dict = {
     'light': {
@@ -63,8 +63,8 @@ class App(tk.Tk):
         self._tray_icon = None
         self._going_to_tray = False
         self._stop_triggered = False
-        self._tray_minimize: tk.BooleanVar  # set in _build_footer
         self._current_interval = settings.DEFAULTS['interval']
+        self._tray_minimize: tk.BooleanVar  # set in _build_footer
 
         self._tw: dict[str, list] = {
             'bg_frames': [],
@@ -86,7 +86,6 @@ class App(tk.Tk):
 
         self._ctrl = Controller({
             'status': lambda msg: self.after(0, lambda m=msg: self._status.set(m)),
-            'on_emergency': lambda: self.after(0, self._on_emergency_ui),
         })
 
         self.protocol('WM_DELETE_WINDOW', self._on_close)
@@ -293,11 +292,6 @@ class App(tk.Tk):
         f.pack(fill='x', padx=12, pady=(0, 5))
         self._tw['bg_frames'].append(f)
 
-        el = tk.Label(f, text='緊急停止: 画面左上コーナーへ移動',
-                      font=('Helvetica', 8))
-        el.pack(side='left')
-        self._tw['muted'].append(el)
-
         vl = tk.Label(f, text=f'v{VERSION}', font=('Helvetica', 8))
         vl.pack(side='right')
         self._tw['muted'].append(vl)
@@ -407,9 +401,6 @@ class App(tk.Tk):
             self.after(0, lambda i=i: self._status.set(f'{label} を{i}秒後に取得します…'))
             time.sleep(1)
         x, y = pyautogui.position()
-        if x == 0 and y == 0:
-            self.after(0, lambda: self._status.set(f'{label} の取得をキャンセル: (0,0) は設定できません'))
-            return
         self.after(0, lambda: xv.set(str(x)))
         self.after(0, lambda: yv.set(str(y)))
         self.after(0, lambda: self._status.set(f'{label} を取得しました: ({x}, {y})'))
@@ -419,12 +410,6 @@ class App(tk.Tk):
         if not cfg:
             self._status.set('入力値を確認してください')
             return
-        if cfg['x1'] == 0 and cfg['y1'] == 0:
-            self._status.set('地点 A に (0, 0) は設定できません')
-            return
-        if cfg['x2'] == 0 and cfg['y2'] == 0:
-            self._status.set('地点 B に (0, 0) は設定できません')
-            return
         self._stop_triggered = False
         self._current_interval = cfg['interval']
         self._ctrl.start(cfg['x1'], cfg['y1'], cfg['x2'], cfg['y2'], cfg['duration'], cfg['interval'])
@@ -433,10 +418,6 @@ class App(tk.Tk):
 
     def _on_stop(self) -> None:
         self._ctrl.stop()
-        self._start_btn.config(state='normal')
-        self._stop_btn.config(state='disabled')
-
-    def _on_emergency_ui(self) -> None:
         self._start_btn.config(state='normal')
         self._stop_btn.config(state='disabled')
 

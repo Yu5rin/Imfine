@@ -3,7 +3,7 @@ import time
 
 import pyautogui
 
-pyautogui.FAILSAFE = True
+pyautogui.FAILSAFE = False
 
 
 class Mover:
@@ -14,7 +14,6 @@ class Mover:
         self._skip_next_wait = False
         self.count = 0
         self.on_count = None
-        self.on_emergency_stop = None
         self.on_before_move = None
         self.on_after_move = None
         self.on_countdown = None
@@ -50,7 +49,6 @@ class Mover:
                 time.sleep(0.05)
                 continue
 
-            # Wait first (skip after resuming from user-pause)
             if not self._skip_next_wait:
                 elapsed = 0.0
                 last_shown = -1
@@ -72,19 +70,11 @@ class Mover:
             else:
                 self._skip_next_wait = False
 
-            # Move
-            try:
-                if self.on_before_move:
-                    self.on_before_move()
-                pyautogui.moveTo(pts[idx][0], pts[idx][1], duration=duration)
-                if self.on_after_move:
-                    self.on_after_move()
-            except pyautogui.FailSafeException:
-                if self.on_after_move:
-                    self.on_after_move()
-                if self.on_emergency_stop:
-                    self.on_emergency_stop()
-                return
+            if self.on_before_move:
+                self.on_before_move()
+            pyautogui.moveTo(pts[idx][0], pts[idx][1], duration=duration)
+            if self.on_after_move:
+                self.on_after_move()
 
             self.count += 1
             idx ^= 1
