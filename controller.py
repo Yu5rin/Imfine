@@ -42,6 +42,7 @@ class Controller:
         self._interval = 60.0
         self._auto_moving = False
         self._countdown_gen = 0
+        self._last_user_move = 0.0
 
         self._mover = Mover()
         self._mover.on_before_move = lambda: setattr(self, '_auto_moving', True)
@@ -79,11 +80,12 @@ class Controller:
     def _on_user_move(self) -> None:
         if self._auto_moving:
             return
+        # Always update timestamp — this resets the countdown without a new thread
+        self._last_user_move = time.monotonic()
         if self.state == self.RUNNING:
             self.state = self.PAUSED
             self._mover.pause()
-        if self.state == self.PAUSED:
-            self._start_countdown()
+            self._start_countdown()  # one thread per RUNNING→PAUSED transition only
 
     def _on_emergency_stop(self) -> None:
         self._monitor.stop()
@@ -102,13 +104,15 @@ class Controller:
         self._countdown_gen += 1
 
     def _countdown_loop(self, gen: int) -> None:
-        remaining = self._interval
-        while remaining > 0:
+        while True:
             if self._countdown_gen != gen:
                 return
-            self._notify(f'一時停止中 / 再開まであと {int(remaining)}秒')
+            elapsed = time.monotonic() - self._last_user_move
+            remaining = self._interval - elapsed
+            if remaining <= 0:
+                break
+            self._notify(f'一時停止中 / 再開まであと {int(remaining) + 1}秒')
             time.sleep(0.5)
-            remaining -= 0.5
         if self._countdown_gen == gen and self.state == self.PAUSED:
             self.state = self.RUNNING
             self._mover.resume()
