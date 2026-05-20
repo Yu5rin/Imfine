@@ -51,12 +51,13 @@ class Controller:
 
         self._monitor = _Monitor(self._on_user_move)
 
-    def start(self, x1: int, y1: int, x2: int, y2: int, duration: float, interval: float) -> None:
+    def start(self, x1: int, y1: int, x2: int, y2: int, duration: float, interval: float,
+              mode: str = 'ab', wiggle_px: int = 5) -> None:
         if self.state in (self.RUNNING, self.PAUSED):
             return
         self._interval = interval
         self.state = self.RUNNING
-        self._mover.start(x1, y1, x2, y2, duration, interval)
+        self._mover.start(x1, y1, x2, y2, duration, interval, mode, wiggle_px)
         self._monitor.start()
         self._notify(f'移動まであと {int(interval)}秒')
 
