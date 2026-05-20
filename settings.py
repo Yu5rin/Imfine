@@ -14,6 +14,8 @@ DEFAULTS: dict = {
     'stop_hour': 17,
     'stop_min': 0,
     'tray_minimize': True,
+    'move_mode': 'ab',
+    'wiggle_px': 5,
 }
 
 
