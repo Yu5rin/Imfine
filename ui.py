@@ -12,7 +12,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.3.1'
+VERSION = '1.4.0'
 
 THEMES: dict = {
     'light': {
@@ -46,8 +46,8 @@ def _res(name: str) -> str:
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title('Mouser')
-        self.geometry('360x455')
+        self.title(f'Mouser  v{VERSION}')
+        self.geometry('360x510')
         self.resizable(False, False)
         try:
             self.iconbitmap(_res('icon.ico'))
@@ -65,6 +65,10 @@ class App(tk.Tk):
         self._stop_triggered = False
         self._current_interval = settings.DEFAULTS['interval']
         self._tray_minimize: tk.BooleanVar  # set in _build_footer
+
+        self._lockable: list = []       # disabled while running
+        self._coord_entries: list = []  # also disabled in wiggle mode
+        self._coord_btns: list = []     # also disabled in wiggle mode
 
         self._tw: dict[str, list] = {
             'bg_frames': [],
@@ -96,6 +100,7 @@ class App(tk.Tk):
 
     def _build(self) -> None:
         self._section('座標設定')
+        self._build_mode()
         self._ax, self._ay = self._coord_row('地点 A')
         self._bx, self._by = self._coord_row('地点 B')
 
@@ -120,6 +125,50 @@ class App(tk.Tk):
         sep.pack(fill='x', padx=12)
         self._tw['borders'].append(sep)
 
+    def _build_mode(self) -> None:
+        row = tk.Frame(self)
+        row.pack(fill='x', padx=12, pady=(3, 1))
+        self._tw['bg_frames'].append(row)
+
+        self._move_mode = tk.StringVar(value='ab')
+
+        rb_ab = tk.Radiobutton(
+            row, text='A-B往復', variable=self._move_mode, value='ab',
+            font=('Helvetica', 9), command=self._on_mode_change,
+        )
+        rb_ab.pack(side='left')
+        self._tw['checks'].append(rb_ab)
+        self._lockable.append(rb_ab)
+
+        rb_w = tk.Radiobutton(
+            row, text='その場でふりこ', variable=self._move_mode, value='wiggle',
+            font=('Helvetica', 9), command=self._on_mode_change,
+        )
+        rb_w.pack(side='left', padx=(8, 0))
+        self._tw['checks'].append(rb_w)
+        self._lockable.append(rb_w)
+
+        dist_lbl = tk.Label(row, text='距離:', font=('Helvetica', 9))
+        dist_lbl.pack(side='left', padx=(12, 2))
+        self._tw['muted'].append(dist_lbl)
+
+        self._wiggle_px = tk.StringVar(value='5')
+        self._wiggle_sp = tk.Spinbox(
+            row, from_=1, to=200, increment=1,
+            textvariable=self._wiggle_px, width=4,
+            relief='solid', bd=1, font=('Helvetica', 9),
+            state='disabled',
+        )
+        self._wiggle_sp.pack(side='left')
+        self._tw['spinboxes'].append(self._wiggle_sp)
+
+        px_lbl = tk.Label(row, text='px', font=('Helvetica', 9))
+        px_lbl.pack(side='left', padx=(2, 0))
+        self._tw['muted'].append(px_lbl)
+
+        self._wiggle_px.trace_add('write', lambda *_: self._save_if_valid())
+        self._move_mode.trace_add('write', lambda *_: self._save_if_valid())
+
     def _coord_row(self, label: str) -> tuple[tk.StringVar, tk.StringVar]:
         row = tk.Frame(self)
         row.pack(fill='x', padx=12, pady=3)
@@ -140,6 +189,7 @@ class App(tk.Tk):
                          highlightthickness=0)
             e.pack(side='left')
             self._tw['entries'].append(e)
+            self._coord_entries.append(e)
             var.trace_add('write', lambda *_: self._save_if_valid())
 
         btn = tk.Button(
@@ -150,6 +200,7 @@ class App(tk.Tk):
         )
         btn.pack(side='left', padx=(8, 0))
         self._tw['btns'].append(btn)
+        self._coord_btns.append(btn)
         return xv, yv
 
     def _build_interval(self) -> None:
@@ -165,6 +216,7 @@ class App(tk.Tk):
         )
         sp.pack(side='left')
         self._tw['spinboxes'].append(sp)
+        self._lockable.append(sp)
 
         ul = tk.Label(outer, text='秒', font=('Helvetica', 10))
         ul.pack(side='left', padx=(4, 0))
@@ -188,6 +240,7 @@ class App(tk.Tk):
                 )
                 btn.pack(side='left', padx=(0, 4))
                 self._tw['btns'].append(btn)
+                self._lockable.append(btn)
 
     def _build_speed(self) -> None:
         row = tk.Frame(self)
@@ -202,6 +255,7 @@ class App(tk.Tk):
         )
         sp.pack(side='left')
         self._tw['spinboxes'].append(sp)
+        self._lockable.append(sp)
 
         ul = tk.Label(row, text='秒', font=('Helvetica', 10))
         ul.pack(side='left', padx=(4, 0))
@@ -289,29 +343,27 @@ class App(tk.Tk):
 
     def _build_footer(self) -> None:
         f = tk.Frame(self)
-        f.pack(fill='x', padx=12, pady=(0, 5))
+        f.pack(fill='x', padx=12, pady=(0, 6))
         self._tw['bg_frames'].append(f)
-
-        vl = tk.Label(f, text=f'v{VERSION}', font=('Helvetica', 8))
-        vl.pack(side='right')
-        self._tw['muted'].append(vl)
-
-        self._toggle_btn = tk.Button(
-            f, text='ダーク', font=('Helvetica', 8),
-            relief='flat', bd=0, padx=4, pady=0,
-            cursor='hand2', command=self._toggle_theme,
-        )
-        self._toggle_btn.pack(side='right', padx=4)
-        self._tw['muted'].append(self._toggle_btn)
 
         self._tray_minimize = tk.BooleanVar(value=True)
         tray_cb = tk.Checkbutton(
             f, variable=self._tray_minimize,
-            text='トレイ', font=('Helvetica', 8),
+            text='最小化時にタスクトレイに格納する',
+            font=('Helvetica', 8),
             command=self._save_if_valid,
         )
-        tray_cb.pack(side='right', padx=(0, 2))
+        tray_cb.pack(anchor='w')
         self._tw['checks'].append(tray_cb)
+
+        self._toggle_btn = tk.Button(
+            f, text='ダーク',
+            font=('Helvetica', 8),
+            relief='solid', bd=1, padx=8, pady=2,
+            cursor='hand2', command=self._toggle_theme,
+        )
+        self._toggle_btn.pack(anchor='e', pady=(3, 0))
+        self._tw['btns'].append(self._toggle_btn)
 
     # ── theme ─────────────────────────────────────────────────────────────
 
@@ -337,8 +389,7 @@ class App(tk.Tk):
         self._stop_btn.configure(bg=t['STOP_BG'], fg=t['TEXT'],
                                   activebackground=t['ENTRY_BG'],
                                   activeforeground=t['TEXT'])
-        label = 'ライト' if self._dark else 'ダーク'
-        self._toggle_btn.configure(text=label)
+        self._toggle_btn.configure(text='ライト' if self._dark else 'ダーク')
 
     def _toggle_theme(self) -> None:
         self._dark = not self._dark
@@ -346,6 +397,32 @@ class App(tk.Tk):
         cfg = self._get_cfg() or {}
         cfg['theme'] = 'dark' if self._dark else 'light'
         settings.save(cfg)
+
+    # ── mode ──────────────────────────────────────────────────────────────
+
+    def _on_mode_change(self) -> None:
+        is_wiggle = self._move_mode.get() == 'wiggle'
+        self._wiggle_sp.configure(state='normal' if is_wiggle else 'disabled')
+        coord_state = 'disabled' if is_wiggle else 'normal'
+        for w in self._coord_entries:
+            w.configure(state=coord_state)
+        for w in self._coord_btns:
+            w.configure(state=coord_state)
+
+    def _set_controls_running(self, running: bool) -> None:
+        base = 'disabled' if running else 'normal'
+        for w in self._lockable:
+            w.configure(state=base)
+        if running:
+            for w in self._coord_entries: w.configure(state='disabled')
+            for w in self._coord_btns:    w.configure(state='disabled')
+            self._wiggle_sp.configure(state='disabled')
+        else:
+            is_ab = self._move_mode.get() == 'ab'
+            coord_state = 'normal' if is_ab else 'disabled'
+            for w in self._coord_entries: w.configure(state=coord_state)
+            for w in self._coord_btns:    w.configure(state=coord_state)
+            self._wiggle_sp.configure(state='disabled' if is_ab else 'normal')
 
     # ── logic ─────────────────────────────────────────────────────────────
 
@@ -361,7 +438,10 @@ class App(tk.Tk):
         self._stop_hour.set(str(c.get('stop_hour', 17)))
         self._stop_min.set(str(c.get('stop_min', 0)))
         self._tray_minimize.set(bool(c.get('tray_minimize', True)))
+        self._move_mode.set(c.get('move_mode', 'ab'))
+        self._wiggle_px.set(str(c.get('wiggle_px', 5)))
         self._on_stop_timer_toggle()
+        self._on_mode_change()
 
     def _on_stop_timer_toggle(self) -> None:
         state = 'normal' if self._stop_timer_enabled.get() else 'disabled'
@@ -382,6 +462,8 @@ class App(tk.Tk):
                 'stop_hour': int(self._stop_hour.get()),
                 'stop_min': int(self._stop_min.get()),
                 'tray_minimize': self._tray_minimize.get(),
+                'move_mode': self._move_mode.get(),
+                'wiggle_px': int(self._wiggle_px.get()),
             }
         except (ValueError, AttributeError):
             return None
@@ -412,12 +494,18 @@ class App(tk.Tk):
             return
         self._stop_triggered = False
         self._current_interval = cfg['interval']
-        self._ctrl.start(cfg['x1'], cfg['y1'], cfg['x2'], cfg['y2'], cfg['duration'], cfg['interval'])
+        self._ctrl.start(
+            cfg['x1'], cfg['y1'], cfg['x2'], cfg['y2'],
+            cfg['duration'], cfg['interval'],
+            cfg['move_mode'], cfg['wiggle_px'],
+        )
+        self._set_controls_running(True)
         self._start_btn.config(state='disabled')
         self._stop_btn.config(state='normal')
 
     def _on_stop(self) -> None:
         self._ctrl.stop()
+        self._set_controls_running(False)
         self._start_btn.config(state='normal')
         self._stop_btn.config(state='disabled')
 

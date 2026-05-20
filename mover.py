@@ -12,16 +12,21 @@ class Mover:
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._skip_next_wait = False
+        self._mode = 'ab'
+        self._wiggle_px = 5
         self.count = 0
         self.on_count = None
         self.on_before_move = None
         self.on_after_move = None
         self.on_countdown = None
 
-    def start(self, x1: int, y1: int, x2: int, y2: int, duration: float, interval: float) -> None:
+    def start(self, x1: int, y1: int, x2: int, y2: int, duration: float, interval: float,
+              mode: str = 'ab', wiggle_px: int = 5) -> None:
         self._stop_event.clear()
         self._pause_event.clear()
         self._skip_next_wait = False
+        self._mode = mode
+        self._wiggle_px = wiggle_px
         self.count = 0
         self._thread = threading.Thread(
             target=self._run,
@@ -72,11 +77,21 @@ class Mover:
 
             if self.on_before_move:
                 self.on_before_move()
-            pyautogui.moveTo(pts[idx][0], pts[idx][1], duration=duration)
+
+            if self._mode == 'wiggle':
+                cx, cy = pyautogui.position()
+                d = duration / 4
+                pyautogui.moveTo(cx + self._wiggle_px, cy, duration=d)
+                pyautogui.moveTo(cx, cy, duration=d)
+                pyautogui.moveTo(cx - self._wiggle_px, cy, duration=d)
+                pyautogui.moveTo(cx, cy, duration=d)
+            else:
+                pyautogui.moveTo(pts[idx][0], pts[idx][1], duration=duration)
+                idx ^= 1
+
             if self.on_after_move:
                 self.on_after_move()
 
             self.count += 1
-            idx ^= 1
             if self.on_count:
                 self.on_count(self.count)
