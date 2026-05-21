@@ -30,7 +30,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             INPUT="${{ github.event.inputs.version }}"
             if [ -z "$INPUT" ]; then
-              VER=$(python -c "import re,sys; m=re.search(r\"VERSION = '([^']+)'\", open('ui.py').read()); print('v'+m.group(1))")
+              VER=$(python -c "import re; m=re.search(r\"VERSION = '([^']+)'\", open('ui.py',encoding='utf-8').read()); print('v'+m.group(1))")
             else
               VER="$INPUT"
             fi
