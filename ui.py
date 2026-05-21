@@ -44,10 +44,23 @@ def _res(name: str) -> str:
 
 
 class App(tk.Tk):
+    @staticmethod
+    def _get_system_dpi() -> int:
+        if sys.platform == 'win32':
+            import ctypes
+            try:
+                return ctypes.windll.user32.GetDpiForSystem()
+            except Exception:
+                pass
+        return 96
+
     def __init__(self) -> None:
         super().__init__()
+        dpi = self._get_system_dpi()
+        self.tk.call('tk', 'scaling', dpi / 72.0)
+        scale = dpi / 96.0
         self.title(f'Mouser  v{VERSION}')
-        self.geometry('360x510')
+        self.geometry(f'{int(360 * scale)}x{int(510 * scale)}')
         self.resizable(False, False)
         try:
             self.iconbitmap(_res('icon.ico'))
