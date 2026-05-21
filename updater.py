@@ -9,6 +9,7 @@ import threading
 REPO = 'Yu5rin/Mouser'
 
 _URLS = [
+    f'https://raw.githubusercontent.com/{REPO}/main/ui.py',
     f'https://github.com/{REPO}/releases',
     f'https://api.github.com/repos/{REPO}/releases/latest',
 ]
@@ -19,10 +20,17 @@ def _parse_ver(tag: str) -> tuple:
 
 
 def _parse_body(body: str) -> 'tuple[str, str] | None':
+    # raw ui.py: VERSION = '1.6.7'
+    m = re.search(r"VERSION\s*=\s*['\"]([^'\"]+)['\"]", body)
+    if m:
+        tag = f'v{m.group(1)}'
+        return tag, f'https://github.com/{REPO}/releases/download/{tag}/Mouser.exe'
+    # HTML releases page: /releases/tag/v1.6.7
     m = re.search(r'/releases/tag/(v[\d.]+)', body)
     if m:
         tag = m.group(1)
         return tag, f'https://github.com/{REPO}/releases/download/{tag}/Mouser.exe'
+    # JSON API response
     try:
         data = json.loads(body)
         if 'tag_name' in data:
