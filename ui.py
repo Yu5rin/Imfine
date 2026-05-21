@@ -8,7 +8,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.5.4'
+VERSION = '1.5.5'
 
 THEMES: dict = {
     'light': {
@@ -104,11 +104,12 @@ class App(tk.Tk):
     # ── layout ────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        self._build_controls()
-        self._build_status()
+        self._build_theme_toggle()
         self._section('停止時刻')
         self._build_stop_timer()
-        self._build_footer()
+        self._build_controls()
+        self._build_status()
+        self._build_tray_setting()
 
     def _section(self, title: str) -> None:
         lbl = tk.Label(self, text=title, font=('Helvetica', 9))
@@ -118,41 +119,19 @@ class App(tk.Tk):
         sep.pack(fill='x', padx=12)
         self._tw['borders'].append(sep)
 
-    def _build_controls(self) -> None:
+    def _build_theme_toggle(self) -> None:
         f = tk.Frame(self)
-        f.pack(pady=(8, 4))
+        f.pack(fill='x', padx=12, pady=(6, 2))
         self._tw['bg_frames'].append(f)
 
-        self._start_btn = tk.Button(
-            f, text='START', bg=START_BG, fg='white',
-            font=('Helvetica', 12, 'bold'), padx=20, pady=4,
-            relief='flat', cursor='hand2', command=self._on_start,
-            activebackground='#3A7BC8', activeforeground='white',
+        self._toggle_btn = tk.Button(
+            f, text='ダーク',
+            font=('Helvetica', 8),
+            relief='solid', bd=1, padx=8, pady=2,
+            cursor='hand2', command=self._toggle_theme,
         )
-        self._start_btn.pack(side='left', padx=6)
-
-        self._stop_btn = tk.Button(
-            f, text='STOP',
-            font=('Helvetica', 12, 'bold'), padx=20, pady=4,
-            relief='solid', bd=1, cursor='hand2', command=self._on_stop,
-            state='disabled',
-        )
-        self._stop_btn.pack(side='left', padx=6)
-
-    def _build_status(self) -> None:
-        sep = tk.Frame(self, height=1)
-        sep.pack(fill='x', padx=12)
-        self._tw['borders'].append(sep)
-
-        f = tk.Frame(self)
-        f.pack(fill='x', padx=12, pady=3)
-        self._tw['bg_frames'].append(f)
-
-        self._status = tk.StringVar(value='待機中')
-        lbl = tk.Label(f, textvariable=self._status,
-                        font=('Helvetica', 10), anchor='center')
-        lbl.pack(fill='x')
-        self._tw['labels'].append(lbl)
+        self._toggle_btn.pack(anchor='w')
+        self._tw['btns'].append(self._toggle_btn)
 
     def _build_stop_timer(self) -> None:
         outer = tk.Frame(self)
@@ -197,9 +176,49 @@ class App(tk.Tk):
         self._stop_min.trace_add('write', lambda *_: self._save_if_valid())
         self._stop_timer_enabled.trace_add('write', lambda *_: self._save_if_valid())
 
-    def _build_footer(self) -> None:
+    def _build_controls(self) -> None:
         f = tk.Frame(self)
-        f.pack(fill='x', padx=12, pady=(4, 4))
+        f.pack(pady=(6, 4))
+        self._tw['bg_frames'].append(f)
+
+        self._start_btn = tk.Button(
+            f, text='START', bg=START_BG, fg='white',
+            font=('Helvetica', 12, 'bold'), padx=20, pady=4,
+            relief='flat', cursor='hand2', command=self._on_start,
+            activebackground='#3A7BC8', activeforeground='white',
+        )
+        self._start_btn.pack(side='left', padx=6)
+
+        self._stop_btn = tk.Button(
+            f, text='STOP',
+            font=('Helvetica', 12, 'bold'), padx=20, pady=4,
+            relief='solid', bd=1, cursor='hand2', command=self._on_stop,
+            state='disabled',
+        )
+        self._stop_btn.pack(side='left', padx=6)
+
+    def _build_status(self) -> None:
+        sep = tk.Frame(self, height=1)
+        sep.pack(fill='x', padx=12)
+        self._tw['borders'].append(sep)
+
+        f = tk.Frame(self)
+        f.pack(fill='x', padx=12, pady=3)
+        self._tw['bg_frames'].append(f)
+
+        self._status = tk.StringVar(value='待機中')
+        lbl = tk.Label(f, textvariable=self._status,
+                        font=('Helvetica', 10), anchor='center')
+        lbl.pack(fill='x')
+        self._tw['labels'].append(lbl)
+
+    def _build_tray_setting(self) -> None:
+        sep = tk.Frame(self, height=1)
+        sep.pack(fill='x', padx=12)
+        self._tw['borders'].append(sep)
+
+        f = tk.Frame(self)
+        f.pack(fill='x', padx=12, pady=(4, 6))
         self._tw['bg_frames'].append(f)
 
         self._tray_minimize = tk.BooleanVar(value=True)
@@ -211,15 +230,6 @@ class App(tk.Tk):
         )
         tray_cb.pack(anchor='w')
         self._tw['checks'].append(tray_cb)
-
-        self._toggle_btn = tk.Button(
-            f, text='ダーク',
-            font=('Helvetica', 8),
-            relief='solid', bd=1, padx=8, pady=2,
-            cursor='hand2', command=self._toggle_theme,
-        )
-        self._toggle_btn.pack(anchor='e', pady=(3, 0))
-        self._tw['btns'].append(self._toggle_btn)
 
     # ── theme ─────────────────────────────────────────────────────────────
 
