@@ -20,31 +20,13 @@ def _send_heartbeat() -> None:
     if sys.platform != 'win32':
         return
     import ctypes
-
-    INPUT_KEYBOARD  = 1
-    VK_F15          = 0x7E
-    KEYEVENTF_KEYUP = 0x0002
-
-    class _KEYBDINPUT(ctypes.Structure):
-        _fields_ = [
-            ('wVk',         ctypes.c_ushort),
-            ('wScan',       ctypes.c_ushort),
-            ('dwFlags',     ctypes.c_ulong),
-            ('time',        ctypes.c_ulong),
-            ('dwExtraInfo', ctypes.c_ulong * 2),
-        ]
-
-    class _INPUT(ctypes.Structure):
-        class _U(ctypes.Union):
-            _fields_ = [('ki', _KEYBDINPUT)]
-        _anonymous_ = ('_u',)
-        _fields_ = [('type', ctypes.c_ulong), ('_u', _U)]
-
-    inputs = (_INPUT * 2)(
-        _INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(wVk=VK_F15, dwFlags=0)),
-        _INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(wVk=VK_F15, dwFlags=KEYEVENTF_KEYUP)),
-    )
-    ctypes.windll.user32.SendInput(2, inputs, ctypes.sizeof(_INPUT))
+    u32 = ctypes.windll.user32
+    # F15 キー (VK=0x7E) — GetLastInputInfo をリセット、画面上の変化なし
+    u32.keybd_event(0x7E, 0, 0, 0)          # key down
+    u32.keybd_event(0x7E, 0, 2, 0)          # key up
+    # マウス微小移動 — Teams 独自の検出にも対応
+    u32.mouse_event(0x0001,  1, 0, 0, 0)    # MOUSEEVENTF_MOVE +1px
+    u32.mouse_event(0x0001, -1, 0, 0, 0)    # -1px (戻す)
 
 
 class Controller:
