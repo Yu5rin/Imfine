@@ -39,6 +39,15 @@ jobs:
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Delete existing release and tag if present (manual trigger only)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete ${{ steps.ver.outputs.tag }} --yes 2>/dev/null || true
+          git push origin --delete ${{ steps.ver.outputs.tag }} 2>/dev/null || true
+
       - name: Create and push tag (manual trigger only)
         if: github.event_name == 'workflow_dispatch'
         shell: bash

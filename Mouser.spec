@@ -16,7 +16,6 @@ a = Analysis(
         'pkg_resources', 'setuptools', 'distutils',
         'sqlite3', 'csv',
         'difflib', 'fractions',
-        'calendar',
         'tarfile', 'gzip', 'bz2', 'lzma',
         'ftplib', 'smtplib', 'imaplib', 'poplib',
         # PIL format plugins (不使用 — アイコンは描画生成)
