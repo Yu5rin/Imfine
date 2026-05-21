@@ -19,7 +19,7 @@ a = Analysis(
         'asyncio', 'sqlite3', 'csv',
         'difflib', 'decimal', 'fractions',
         'calendar', 'gettext', 'ipaddress',
-        'zipfile', 'tarfile', 'gzip', 'bz2', 'lzma',
+        'tarfile', 'gzip', 'bz2', 'lzma',
         'ftplib', 'smtplib', 'imaplib', 'poplib',
         # PIL format plugins (不使用 — アイコンは描画生成)
         'PIL.BmpImagePlugin', 'PIL.GifImagePlugin',
