@@ -8,7 +8,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.5.5'
+VERSION = '1.5.6'
 
 THEMES: dict = {
     'light': {
@@ -91,7 +91,7 @@ class App(tk.Tk):
         self._loading = False
 
         self.update_idletasks()
-        self.geometry(f'{int(360 * self._scale)}x{self.winfo_reqheight()}')
+        self.geometry(f'{int(300 * self._scale)}x{self.winfo_reqheight()}')
 
         self._ctrl = Controller({
             'status': lambda msg: self.after(0, lambda m=msg: self._status.set(m)),
@@ -130,7 +130,7 @@ class App(tk.Tk):
             relief='solid', bd=1, padx=8, pady=2,
             cursor='hand2', command=self._toggle_theme,
         )
-        self._toggle_btn.pack(anchor='w')
+        self._toggle_btn.pack(anchor='e')
         self._tw['btns'].append(self._toggle_btn)
 
     def _build_stop_timer(self) -> None:
