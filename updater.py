@@ -12,21 +12,17 @@ def _parse_ver(tag: str) -> tuple:
 
 
 def _fetch_latest() -> dict:
-    ps_cmd = (
-        '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; '
-        '$r = Invoke-WebRequest'
-        ' -Uri "https://api.github.com/repos/' + REPO + '/releases/latest"'
-        ' -UseBasicParsing'
-        ' -Headers @{"User-Agent" = "Mouser"}; $r.Content'
-    )
     result = subprocess.run(
-        ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_cmd],
-        capture_output=True, text=True, timeout=20,
+        ['curl.exe', '-s', '-L',
+         '-H', 'User-Agent: Mouser',
+         f'https://api.github.com/repos/{REPO}/releases/latest'],
+        capture_output=True, text=True, timeout=15,
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
-    if result.returncode != 0 or not result.stdout.strip():
+    body = result.stdout.strip()
+    if not body:
         raise RuntimeError(result.stderr.strip() or 'empty response')
-    return json.loads(result.stdout)
+    return json.loads(body)
 
 
 def check_and_prompt(current_version: str, on_update_available,
@@ -43,7 +39,7 @@ def check_and_prompt(current_version: str, on_update_available,
             if _parse_ver(latest_tag) > _parse_ver(current_version):
                 on_update_available(latest_tag, dl_url)
             elif on_up_to_date:
-                on_up_to_date(latest_tag)
+                on_up_to_date(latest_tag, None)
         except Exception as e:
             if on_up_to_date:
                 on_up_to_date(None, str(e))
@@ -56,12 +52,8 @@ def download_and_replace(dl_url: str) -> None:
         return
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.exe')
     tmp.close()
-    ps_cmd = (
-        '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; '
-        f'Invoke-WebRequest -Uri "{dl_url}" -OutFile "{tmp.name}" -UseBasicParsing'
-    )
     subprocess.run(
-        ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_cmd],
+        ['curl.exe', '-s', '-L', '-o', tmp.name, dl_url],
         timeout=120,
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
