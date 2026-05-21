@@ -21,21 +21,28 @@ def _send_heartbeat() -> None:
         return
     import ctypes
 
-    class _MOUSEINPUT(ctypes.Structure):
-        _fields_ = [('dx', ctypes.c_long), ('dy', ctypes.c_long),
-                    ('mouseData', ctypes.c_ulong), ('dwFlags', ctypes.c_ulong),
-                    ('time', ctypes.c_ulong), ('dwExtraInfo', ctypes.c_ulong)]
+    INPUT_KEYBOARD  = 1
+    VK_F15          = 0x7E
+    KEYEVENTF_KEYUP = 0x0002
+
+    class _KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ('wVk',         ctypes.c_ushort),
+            ('wScan',       ctypes.c_ushort),
+            ('dwFlags',     ctypes.c_ulong),
+            ('time',        ctypes.c_ulong),
+            ('dwExtraInfo', ctypes.c_ulong * 2),
+        ]
 
     class _INPUT(ctypes.Structure):
         class _U(ctypes.Union):
-            _fields_ = [('mi', _MOUSEINPUT)]
+            _fields_ = [('ki', _KEYBDINPUT)]
         _anonymous_ = ('_u',)
         _fields_ = [('type', ctypes.c_ulong), ('_u', _U)]
 
-    MOUSEEVENTF_MOVE = 0x0001
     inputs = (_INPUT * 2)(
-        _INPUT(type=0, mi=_MOUSEINPUT(dx=1,  dy=0, dwFlags=MOUSEEVENTF_MOVE)),
-        _INPUT(type=0, mi=_MOUSEINPUT(dx=-1, dy=0, dwFlags=MOUSEEVENTF_MOVE)),
+        _INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(wVk=VK_F15, dwFlags=0)),
+        _INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(wVk=VK_F15, dwFlags=KEYEVENTF_KEYUP)),
     )
     ctypes.windll.user32.SendInput(2, inputs, ctypes.sizeof(_INPUT))
 
