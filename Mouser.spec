@@ -11,14 +11,12 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # unused stdlib
-        'email', 'xml', 'html', 'http', 'urllib',
+        # unused stdlib (PyInstaller内部依存を避けた安全なもののみ)
         'unittest', 'pydoc', 'doctest', 'test',
         'pkg_resources', 'setuptools', 'distutils',
-        'multiprocessing', 'concurrent',
-        'asyncio', 'sqlite3', 'csv',
-        'difflib', 'decimal', 'fractions',
-        'calendar', 'gettext', 'ipaddress',
+        'sqlite3', 'csv',
+        'difflib', 'fractions',
+        'calendar',
         'tarfile', 'gzip', 'bz2', 'lzma',
         'ftplib', 'smtplib', 'imaplib', 'poplib',
         # PIL format plugins (不使用 — アイコンは描画生成)
