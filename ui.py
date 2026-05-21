@@ -12,7 +12,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.4.0'
+VERSION = '1.4.3'
 
 THEMES: dict = {
     'light': {
@@ -58,9 +58,8 @@ class App(tk.Tk):
         super().__init__()
         dpi = self._get_system_dpi()
         self.tk.call('tk', 'scaling', dpi / 72.0)
-        scale = dpi / 96.0
+        self._scale = dpi / 96.0
         self.title(f'Mouser  v{VERSION}')
-        self.geometry(f'{int(360 * scale)}x{int(465 * scale)}')
         self.resizable(False, False)
         try:
             self.iconbitmap(_res('icon.ico'))
@@ -100,6 +99,10 @@ class App(tk.Tk):
         self._loading = True
         self._load_settings()
         self._loading = False
+
+        # ウィジェット描画後に必要な高さを取得して確定
+        self.update_idletasks()
+        self.geometry(f'{int(360 * self._scale)}x{self.winfo_reqheight()}')
 
         self._ctrl = Controller({
             'status': lambda msg: self.after(0, lambda m=msg: self._status.set(m)),
