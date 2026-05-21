@@ -8,7 +8,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.5.2'
+VERSION = '1.5.3'
 
 THEMES: dict = {
     'light': {
