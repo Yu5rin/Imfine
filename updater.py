@@ -13,16 +13,27 @@ def _parse_ver(tag: str) -> tuple:
 
 def _fetch_latest() -> tuple[str, str]:
     """Returns (tag, download_url) via the releases Atom feed (no rate limit)."""
-    result = subprocess.run(
-        ['curl.exe', '-s', '-L',
-         '-H', 'User-Agent: Mouser',
-         f'https://github.com/{REPO}/releases.atom'],
-        capture_output=True, text=True, timeout=15,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
-    m = re.search(r'/releases/tag/(v[\d.]+)', result.stdout)
+    import os
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.xml')
+    tmp.close()
+    try:
+        subprocess.run(
+            ['curl.exe', '-s', '-L', '-o', tmp.name,
+             '-H', 'User-Agent: Mouser',
+             f'https://github.com/{REPO}/releases.atom'],
+            timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        with open(tmp.name, encoding='utf-8', errors='replace') as f:
+            body = f.read()
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+    m = re.search(r'/releases/tag/(v[\d.]+)', body)
     if not m:
-        raise RuntimeError('no release found in feed')
+        raise RuntimeError(f'feed: {body[:60]!r}')
     tag = m.group(1)
     dl_url = f'https://github.com/{REPO}/releases/download/{tag}/Mouser.exe'
     return tag, dl_url
