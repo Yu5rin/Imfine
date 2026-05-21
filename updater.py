@@ -1,9 +1,14 @@
 import json
+import ssl
 import subprocess
 import sys
 import tempfile
 import threading
 import urllib.request
+
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 REPO = 'Yu5rin/Mouser'
 API  = f'https://api.github.com/repos/{REPO}/releases/latest'
@@ -18,7 +23,7 @@ def check_and_prompt(current_version: str, on_update_available,
     def _worker():
         try:
             req = urllib.request.Request(API, headers={'User-Agent': 'Mouser'})
-            with urllib.request.urlopen(req, timeout=5) as r:
+            with urllib.request.urlopen(req, timeout=5, context=_SSL_CTX) as r:
                 data = json.loads(r.read())
             latest_tag = data['tag_name']
             dl_url = next(

@@ -10,7 +10,7 @@ import updater
 from controller import Controller
 
 
-VERSION = '1.6.5'
+VERSION = '1.6.6'
 
 THEMES: dict = {
     'light': {
