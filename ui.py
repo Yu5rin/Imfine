@@ -8,7 +8,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.5.8'
+VERSION = '1.5.9'
 
 THEMES: dict = {
     'light': {
@@ -71,6 +71,7 @@ class App(tk.Tk):
         self._tray_icon = None
         self._going_to_tray = False
         self._stop_triggered = False
+        self._stop_target: datetime.datetime | None = None
         self._tray_minimize: tk.BooleanVar  # set in _build_footer
 
         self._tw: dict[str, list] = {
@@ -148,7 +149,7 @@ class App(tk.Tk):
         self._tw['checks'].append(cb)
 
         self._stop_hour = tk.StringVar(value='17')
-        self._stop_min  = tk.StringVar(value='0')
+        self._stop_min  = tk.StringVar(value='00')
 
         self._stop_hour_sp = tk.Spinbox(
             outer, from_=0, to=23, increment=1,
@@ -173,7 +174,7 @@ class App(tk.Tk):
         self._tw['spinboxes'].append(self._stop_min_sp)
 
         self._stop_hour.trace_add('write', lambda *_: self._save_if_valid())
-        self._stop_min.trace_add('write', lambda *_: self._save_if_valid())
+        self._stop_min.trace_add('write', lambda *_: self._fmt_min_and_save())
         self._stop_timer_enabled.trace_add('write', lambda *_: self._save_if_valid())
 
     def _build_controls(self) -> None:
@@ -268,7 +269,7 @@ class App(tk.Tk):
         c = self._cfg
         self._stop_timer_enabled.set(bool(c.get('stop_timer_enabled', False)))
         self._stop_hour.set(str(c.get('stop_hour', 17)))
-        self._stop_min.set(str(c.get('stop_min', 0)))
+        self._stop_min.set(f"{c.get('stop_min', 0):02d}")
         self._tray_minimize.set(bool(c.get('tray_minimize', True)))
         self._on_stop_timer_toggle()
 
@@ -296,8 +297,34 @@ class App(tk.Tk):
         if cfg:
             settings.save(cfg)
 
+    def _fmt_min_and_save(self) -> None:
+        if self._loading:
+            return
+        try:
+            v = int(self._stop_min.get())
+            fmt = f'{v:02d}'
+            if self._stop_min.get() != fmt:
+                self._stop_min.set(fmt)
+                return
+        except ValueError:
+            pass
+        self._save_if_valid()
+
+    def _calc_stop_target(self) -> 'datetime.datetime | None':
+        try:
+            now = datetime.datetime.now()
+            h = int(self._stop_hour.get())
+            m = int(self._stop_min.get())
+            dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+            if dt <= now:
+                dt += datetime.timedelta(days=1)
+            return dt
+        except (ValueError, AttributeError):
+            return None
+
     def _on_start(self) -> None:
         self._stop_triggered = False
+        self._stop_target = self._calc_stop_target()
         self._ctrl.start()
         self._start_btn.config(state='disabled')
         self._stop_btn.config(state='normal')
@@ -311,18 +338,11 @@ class App(tk.Tk):
         if (self._stop_timer_enabled.get()
                 and not self._stop_triggered
                 and hasattr(self, '_ctrl')
-                and self._ctrl.state == Controller.RUNNING):
-            try:
-                import datetime
-                now = datetime.datetime.now()
-                h = int(self._stop_hour.get())
-                m = int(self._stop_min.get())
-                stop_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
-                if now >= stop_dt:
-                    self._stop_triggered = True
-                    self._on_stop()
-            except (ValueError, AttributeError):
-                pass
+                and self._ctrl.state == Controller.RUNNING
+                and self._stop_target is not None):
+            if datetime.datetime.now() >= self._stop_target:
+                self._stop_triggered = True
+                self._on_stop()
         self.after(1000, self._check_stop_timer)
 
     # ── window events ─────────────────────────────────────────────────────
