@@ -18,8 +18,8 @@ a = Analysis(
         'difflib', 'fractions',
         'tarfile', 'gzip', 'bz2', 'lzma',
         'ftplib', 'smtplib', 'imaplib', 'poplib',
-        # PIL format plugins (不使用 — アイコンは描画生成)
-        'PIL.BmpImagePlugin', 'PIL.GifImagePlugin',
+        # PIL format plugins (BmpImagePlugin は pystray が HICON 生成に使用するため除外不可)
+        'PIL.GifImagePlugin',
         'PIL.JpegImagePlugin', 'PIL.Jpeg2KImagePlugin',
         'PIL.TiffImagePlugin', 'PIL.WebPImagePlugin',
         'PIL.IcoImagePlugin',  'PIL.PngImagePlugin',
