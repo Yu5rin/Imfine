@@ -8,7 +8,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.5.3'
+VERSION = '1.5.4'
 
 THEMES: dict = {
     'light': {
@@ -112,7 +112,7 @@ class App(tk.Tk):
 
     def _section(self, title: str) -> None:
         lbl = tk.Label(self, text=title, font=('Helvetica', 9))
-        lbl.pack(anchor='w', padx=14, pady=(8, 1))
+        lbl.pack(anchor='w', padx=14, pady=(4, 1))
         self._tw['muted'].append(lbl)
         sep = tk.Frame(self, height=1)
         sep.pack(fill='x', padx=12)
@@ -120,12 +120,12 @@ class App(tk.Tk):
 
     def _build_controls(self) -> None:
         f = tk.Frame(self)
-        f.pack(pady=(16, 8))
+        f.pack(pady=(8, 4))
         self._tw['bg_frames'].append(f)
 
         self._start_btn = tk.Button(
             f, text='START', bg=START_BG, fg='white',
-            font=('Helvetica', 12, 'bold'), padx=28, pady=6,
+            font=('Helvetica', 12, 'bold'), padx=20, pady=4,
             relief='flat', cursor='hand2', command=self._on_start,
             activebackground='#3A7BC8', activeforeground='white',
         )
@@ -133,7 +133,7 @@ class App(tk.Tk):
 
         self._stop_btn = tk.Button(
             f, text='STOP',
-            font=('Helvetica', 12, 'bold'), padx=28, pady=6,
+            font=('Helvetica', 12, 'bold'), padx=20, pady=4,
             relief='solid', bd=1, cursor='hand2', command=self._on_stop,
             state='disabled',
         )
@@ -145,7 +145,7 @@ class App(tk.Tk):
         self._tw['borders'].append(sep)
 
         f = tk.Frame(self)
-        f.pack(fill='x', padx=12, pady=6)
+        f.pack(fill='x', padx=12, pady=3)
         self._tw['bg_frames'].append(f)
 
         self._status = tk.StringVar(value='待機中')
@@ -156,7 +156,7 @@ class App(tk.Tk):
 
     def _build_stop_timer(self) -> None:
         outer = tk.Frame(self)
-        outer.pack(fill='x', padx=12, pady=3)
+        outer.pack(fill='x', padx=12, pady=2)
         self._tw['bg_frames'].append(outer)
 
         self._stop_timer_enabled = tk.BooleanVar(value=False)
@@ -199,7 +199,7 @@ class App(tk.Tk):
 
     def _build_footer(self) -> None:
         f = tk.Frame(self)
-        f.pack(fill='x', padx=12, pady=(6, 6))
+        f.pack(fill='x', padx=12, pady=(4, 4))
         self._tw['bg_frames'].append(f)
 
         self._tray_minimize = tk.BooleanVar(value=True)
