@@ -60,7 +60,7 @@ class App(tk.Tk):
         self.tk.call('tk', 'scaling', dpi / 72.0)
         scale = dpi / 96.0
         self.title(f'Mouser  v{VERSION}')
-        self.geometry(f'{int(360 * scale)}x{int(510 * scale)}')
+        self.geometry(f'{int(360 * scale)}x{int(465 * scale)}')
         self.resizable(False, False)
         try:
             self.iconbitmap(_res('icon.ico'))
