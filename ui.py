@@ -10,7 +10,7 @@ import updater
 from controller import Controller
 
 
-VERSION = '1.6.2'
+VERSION = '1.6.3'
 
 THEMES: dict = {
     'light': {
@@ -94,7 +94,7 @@ class App(tk.Tk):
         self._loading = False
 
         self.update_idletasks()
-        self.geometry(f'{int(300 * self._scale)}x{self.winfo_reqheight()}')
+        self.geometry(f'{int(260 * self._scale)}x{self.winfo_reqheight()}')
 
         self._ctrl = Controller({
             'status': lambda msg: self.after(0, lambda m=msg: self._status.set(m)),
