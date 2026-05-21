@@ -12,18 +12,17 @@ def _parse_ver(tag: str) -> tuple:
 
 
 def _fetch_latest() -> tuple[str, str]:
-    """Returns (tag, download_url) by following the releases/latest redirect."""
+    """Returns (tag, download_url) via the releases Atom feed (no rate limit)."""
     result = subprocess.run(
-        ['curl.exe', '-s', '-L', '-o', 'NUL',
-         '-w', '%{url_effective}',
-         f'https://github.com/{REPO}/releases/latest'],
+        ['curl.exe', '-s', '-L',
+         '-H', 'User-Agent: Mouser',
+         f'https://github.com/{REPO}/releases.atom'],
         capture_output=True, text=True, timeout=15,
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
-    url = result.stdout.strip()
-    m = re.search(r'/releases/tag/(v[\d.]+)$', url)
+    m = re.search(r'/releases/tag/(v[\d.]+)', result.stdout)
     if not m:
-        raise RuntimeError(f'redirect url unexpected: {url[:80]}')
+        raise RuntimeError('no release found in feed')
     tag = m.group(1)
     dl_url = f'https://github.com/{REPO}/releases/download/{tag}/Mouser.exe'
     return tag, dl_url
