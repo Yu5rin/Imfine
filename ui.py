@@ -10,7 +10,7 @@ import updater
 from controller import Controller
 
 
-VERSION = '1.6.3'
+VERSION = '1.6.4'
 
 THEMES: dict = {
     'light': {
@@ -128,13 +128,22 @@ class App(tk.Tk):
         f.pack(fill='x', padx=12, pady=(6, 2))
         self._tw['bg_frames'].append(f)
 
+        update_btn = tk.Button(
+            f, text='更新',
+            font=('Helvetica', 8),
+            relief='solid', bd=1, padx=8, pady=2,
+            cursor='hand2', command=self._check_update,
+        )
+        update_btn.pack(side='right', padx=(4, 0))
+        self._tw['btns'].append(update_btn)
+
         self._toggle_btn = tk.Button(
             f, text='ダーク',
             font=('Helvetica', 8),
             relief='solid', bd=1, padx=8, pady=2,
             cursor='hand2', command=self._toggle_theme,
         )
-        self._toggle_btn.pack(anchor='e')
+        self._toggle_btn.pack(side='right')
         self._tw['btns'].append(self._toggle_btn)
 
     def _build_stop_timer(self) -> None:
