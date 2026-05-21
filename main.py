@@ -1,6 +1,19 @@
 import sys
 
 
+def _set_dpi_aware() -> None:
+    if sys.platform != 'win32':
+        return
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 def _check_single_instance() -> None:
     if sys.platform != 'win32':
         return
@@ -20,6 +33,7 @@ from ui import App
 
 
 def main() -> None:
+    _set_dpi_aware()
     _check_single_instance()
     app = App()
     app.mainloop()

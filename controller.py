@@ -1,9 +1,24 @@
+import sys
 import threading
 import time
 
 from pynput import mouse as _mouse
 
 from mover import Mover
+
+_ES_CONTINUOUS       = 0x80000000
+_ES_SYSTEM_REQUIRED  = 0x00000001
+_ES_DISPLAY_REQUIRED = 0x00000002
+
+
+def _set_execution_state(active: bool) -> None:
+    if sys.platform != 'win32':
+        return
+    import ctypes
+    flags = _ES_CONTINUOUS
+    if active:
+        flags |= _ES_DISPLAY_REQUIRED | _ES_SYSTEM_REQUIRED
+    ctypes.windll.kernel32.SetThreadExecutionState(flags)
 
 
 class _Monitor:
@@ -59,12 +74,14 @@ class Controller:
         self.state = self.RUNNING
         self._mover.start(x1, y1, x2, y2, duration, interval, mode, wiggle_px)
         self._monitor.start()
+        _set_execution_state(True)
         self._notify(f'移動まであと {int(interval)}秒')
 
     def stop(self) -> None:
         self._mover.stop()
         self._monitor.stop()
         self._cancel_countdown()
+        _set_execution_state(False)
         self.state = self.STOPPED
         self._notify('停止しました')
 
