@@ -1,14 +1,16 @@
 import datetime
 import os
 import sys
+import threading
 import tkinter as tk
 from tkinter import messagebox
 
 import settings
+import updater
 from controller import Controller
 
 
-VERSION = '1.5.9'
+VERSION = '1.6.0'
 
 THEMES: dict = {
     'light': {
@@ -101,6 +103,7 @@ class App(tk.Tk):
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         self.bind('<Unmap>', self._on_unmap)
         self.after(1000, self._check_stop_timer)
+        self.after(2000, self._check_update)
 
     # ── layout ────────────────────────────────────────────────────────────
 
@@ -297,6 +300,20 @@ class App(tk.Tk):
         if cfg:
             settings.save(cfg)
 
+    def _check_update(self) -> None:
+        def on_available(tag: str, url: str) -> None:
+            self.after(0, lambda: self._prompt_update(tag, url))
+        updater.check_and_prompt(VERSION, on_available)
+
+    def _prompt_update(self, tag: str, url: str) -> None:
+        if messagebox.askyesno('Mouser',
+                f'新しいバージョン {tag} があります。\n今すぐアップデートしますか？'):
+            self._status.set('ダウンロード中...')
+            threading.Thread(
+                target=lambda: updater.download_and_replace(url),
+                daemon=True,
+            ).start()
+
     def _fmt_min_and_save(self) -> None:
         if self._loading:
             return
@@ -387,8 +404,7 @@ class App(tk.Tk):
             pystray.MenuItem('終了', self._tray_quit),
         )
         self._tray_icon = pystray.Icon('Mouser', img, 'Mouser', menu)
-        import threading
-        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+        self._tray_icon.run_detached()
 
     def _tray_restore(self, icon=None, item=None) -> None:
         icon_ref = self._tray_icon
