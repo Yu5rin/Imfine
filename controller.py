@@ -66,12 +66,9 @@ class Controller:
         self._notify('停止しました')
 
     def _loop(self) -> None:
-        count = 0
         while not self._stop_ev.wait(30):
             if self.state == self.RUNNING:
                 _send_heartbeat()
-                count += 1
-                self._notify(f'動作中… ハートビート: {count}回')
 
     def _notify(self, msg: str) -> None:
         if cb := self._ui.get('status'):
