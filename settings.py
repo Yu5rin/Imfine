@@ -3,19 +3,11 @@ import os
 import pathlib
 
 DEFAULTS: dict = {
-    'x1': 100,
-    'y1': 300,
-    'x2': 900,
-    'y2': 300,
-    'interval': 60.0,
-    'duration': 0.5,
     'theme': 'light',
     'stop_timer_enabled': False,
     'stop_hour': 17,
     'stop_min': 0,
     'tray_minimize': True,
-    'move_mode': 'ab',
-    'wiggle_px': 5,
 }
 
 
