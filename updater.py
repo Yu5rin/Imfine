@@ -13,7 +13,8 @@ def _parse_ver(tag: str) -> tuple:
     return tuple(int(x) for x in tag.lstrip('v').split('.'))
 
 
-def check_and_prompt(current_version: str, on_update_available) -> None:
+def check_and_prompt(current_version: str, on_update_available,
+                     on_up_to_date=None) -> None:
     def _worker():
         try:
             req = urllib.request.Request(API, headers={'User-Agent': 'Mouser'})
@@ -27,8 +28,11 @@ def check_and_prompt(current_version: str, on_update_available) -> None:
             )
             if _parse_ver(latest_tag) > _parse_ver(current_version):
                 on_update_available(latest_tag, dl_url)
+            elif on_up_to_date:
+                on_up_to_date(latest_tag)
         except Exception:
-            pass
+            if on_up_to_date:
+                on_up_to_date(None)
     threading.Thread(target=_worker, daemon=True).start()
 
 

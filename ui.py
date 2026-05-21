@@ -10,7 +10,7 @@ import updater
 from controller import Controller
 
 
-VERSION = '1.6.4'
+VERSION = '1.6.5'
 
 THEMES: dict = {
     'light': {
@@ -132,7 +132,7 @@ class App(tk.Tk):
             f, text='更新',
             font=('Helvetica', 8),
             relief='solid', bd=1, padx=8, pady=2,
-            cursor='hand2', command=self._check_update,
+            cursor='hand2', command=lambda: self._check_update(manual=True),
         )
         update_btn.pack(side='right', padx=(4, 0))
         self._tw['btns'].append(update_btn)
@@ -309,10 +309,17 @@ class App(tk.Tk):
         if cfg:
             settings.save(cfg)
 
-    def _check_update(self) -> None:
+    def _check_update(self, manual: bool = False) -> None:
+        if manual:
+            self._status.set('更新を確認中...')
         def on_available(tag: str, url: str) -> None:
             self.after(0, lambda: self._prompt_update(tag, url))
-        updater.check_and_prompt(VERSION, on_available)
+        def on_up_to_date(tag) -> None:
+            if manual:
+                msg = '最新版です。' if tag else '確認に失敗しました。'
+                self.after(0, lambda: self._status.set(msg))
+        updater.check_and_prompt(VERSION, on_available,
+                                 on_up_to_date=on_up_to_date if manual else None)
 
     def _prompt_update(self, tag: str, url: str) -> None:
         if messagebox.askyesno('Mouser',
