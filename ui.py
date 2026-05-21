@@ -8,7 +8,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.5.0'
+VERSION = '1.5.1'
 
 THEMES: dict = {
     'light': {
@@ -339,7 +339,7 @@ class App(tk.Tk):
     def _minimize_to_tray(self) -> None:
         try:
             import pystray
-            from PIL import Image as PILImage
+            from PIL import Image as PILImage, ImageDraw
         except ImportError:
             return
         self._going_to_tray = True
@@ -347,10 +347,11 @@ class App(tk.Tk):
         self._going_to_tray = False
         if self._tray_icon is not None:
             return
-        try:
-            img = PILImage.open(_res('icon.png'))
-        except Exception:
-            img = PILImage.new('RGBA', (64, 64), '#4A90D9')
+        img = PILImage.new('RGBA', (64, 64), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        d.rounded_rectangle([4, 4, 60, 60], radius=14, fill='#4A90D9')
+        d.rounded_rectangle([20, 10, 44, 28], radius=4, fill='white')
+        d.ellipse([28, 14, 36, 24], fill='#4A90D9')
         menu = pystray.Menu(
             pystray.MenuItem('タスクトレイから出す', self._tray_restore, default=True),
             pystray.MenuItem('終了', self._tray_quit),
