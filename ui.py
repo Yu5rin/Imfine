@@ -10,7 +10,7 @@ import updater
 from controller import Controller
 
 
-VERSION = '1.6.1'
+VERSION = '1.6.2'
 
 THEMES: dict = {
     'light': {
@@ -386,7 +386,7 @@ class App(tk.Tk):
     def _minimize_to_tray(self) -> None:
         try:
             import pystray
-            from PIL import Image as PILImage, ImageDraw
+            from PIL import Image as PILImage
         except ImportError:
             return
         self._going_to_tray = True
@@ -394,17 +394,16 @@ class App(tk.Tk):
         self._going_to_tray = False
         if self._tray_icon is not None:
             return
-        img = PILImage.new('RGBA', (64, 64), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.rounded_rectangle([4, 4, 60, 60], radius=14, fill='#4A90D9')
-        d.rounded_rectangle([20, 10, 44, 28], radius=4, fill='white')
-        d.ellipse([28, 14, 36, 24], fill='#4A90D9')
+        try:
+            img = PILImage.open(_res('icon.png'))
+        except Exception:
+            img = PILImage.new('RGB', (64, 64), '#4A90D9')
         menu = pystray.Menu(
             pystray.MenuItem('タスクトレイから出す', self._tray_restore, default=True),
             pystray.MenuItem('終了', self._tray_quit),
         )
         self._tray_icon = pystray.Icon('Mouser', img, 'Mouser', menu)
-        self._tray_icon.run_detached()
+        threading.Thread(target=self._tray_icon.run, daemon=True).start()
 
     def _tray_restore(self, icon=None, item=None) -> None:
         icon_ref = self._tray_icon
