@@ -314,9 +314,14 @@ class App(tk.Tk):
             self._status.set('更新を確認中...')
         def on_available(tag: str, url: str) -> None:
             self.after(0, lambda: self._prompt_update(tag, url))
-        def on_up_to_date(tag) -> None:
+        def on_up_to_date(tag, err=None) -> None:
             if manual:
-                msg = '最新版です。' if tag else '確認に失敗しました。'
+                if tag:
+                    msg = '最新版です。'
+                elif err:
+                    msg = f'確認に失敗: {err[:40]}'
+                else:
+                    msg = '確認に失敗しました。'
                 self.after(0, lambda: self._status.set(msg))
         updater.check_and_prompt(VERSION, on_available,
                                  on_up_to_date=on_up_to_date if manual else None)
