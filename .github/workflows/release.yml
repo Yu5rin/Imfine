@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'バージョン番号 (例: v1.4.0)'
-        required: true
+        description: 'バージョン番号 (例: v1.5.9)　空欄で ui.py から自動取得'
+        required: false
         type: string
 
 permissions:
@@ -28,7 +28,13 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            INPUT="${{ github.event.inputs.version }}"
+            if [ -z "$INPUT" ]; then
+              VER=$(python -c "import re,sys; m=re.search(r\"VERSION = '([^']+)'\", open('ui.py').read()); print('v'+m.group(1))")
+            else
+              VER="$INPUT"
+            fi
+            echo "tag=$VER" >> $GITHUB_OUTPUT
           else
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           fi
