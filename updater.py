@@ -12,16 +12,16 @@ def _parse_ver(tag: str) -> tuple:
 
 
 def _fetch_latest() -> tuple[str, str]:
-    """Returns (tag, download_url) via the releases Atom feed (no rate limit)."""
+    """Returns (tag, download_url) by scraping the releases HTML page."""
     import os
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.xml')
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.html')
     tmp.close()
     try:
         subprocess.run(
-            ['curl.exe', '-s', '-L', '-o', tmp.name,
-             '-H', 'User-Agent: Mouser',
-             f'https://github.com/{REPO}/releases.atom'],
-            timeout=15,
+            ['curl.exe', '-s', '-k', '-L', '-o', tmp.name,
+             '-H', 'User-Agent: Mozilla/5.0',
+             f'https://github.com/{REPO}/releases'],
+            timeout=20,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         with open(tmp.name, encoding='utf-8', errors='replace') as f:
@@ -33,7 +33,7 @@ def _fetch_latest() -> tuple[str, str]:
             pass
     m = re.search(r'/releases/tag/(v[\d.]+)', body)
     if not m:
-        raise RuntimeError(f'feed: {body[:60]!r}')
+        raise RuntimeError(f'page: {body[:60]!r}')
     tag = m.group(1)
     dl_url = f'https://github.com/{REPO}/releases/download/{tag}/Mouser.exe'
     return tag, dl_url
@@ -61,7 +61,7 @@ def download_and_replace(dl_url: str) -> None:
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.exe')
     tmp.close()
     subprocess.run(
-        ['curl.exe', '-s', '-L', '-o', tmp.name, dl_url],
+        ['curl.exe', '-s', '-k', '-L', '-o', tmp.name, dl_url],
         timeout=120,
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
