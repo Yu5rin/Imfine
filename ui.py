@@ -180,9 +180,7 @@ class App(tk.Tk):
         self.update_idletasks()
         self.geometry(f'{int(260 * self._scale)}x{self.winfo_reqheight()}')
 
-        self._ctrl = Controller({
-            'status': lambda msg: self.after(0, lambda m=msg: self._status.set(m)),
-        })
+        self._ctrl = Controller({})
 
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         self.bind('<Unmap>', self._on_unmap)
@@ -191,25 +189,21 @@ class App(tk.Tk):
     # ── layout ────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        self._build_theme_toggle()
-        self._section('停止時刻')
+        self._build_header()
         self._build_stop_timer()
+        self._build_separator()
         self._build_controls()
-        self._build_status()
+        self._build_separator()
         self._build_tray_setting()
 
-    def _section(self, title: str) -> None:
-        lbl = tk.Label(self, text=title, font=('Helvetica', 9))
-        lbl.pack(anchor='w', padx=14, pady=(4, 1))
-        self._tw['muted'].append(lbl)
-        sep = tk.Frame(self, height=1)
-        sep.pack(fill='x', padx=12)
-        self._tw['borders'].append(sep)
-
-    def _build_theme_toggle(self) -> None:
+    def _build_header(self) -> None:
         f = tk.Frame(self)
         f.pack(fill='x', padx=12, pady=(6, 2))
         self._tw['bg_frames'].append(f)
+
+        lbl = tk.Label(f, text='停止時刻', font=('Helvetica', 9))
+        lbl.pack(side='left')
+        self._tw['muted'].append(lbl)
 
         self._toggle_btn = tk.Button(
             f, text='ダーク',
@@ -263,41 +257,27 @@ class App(tk.Tk):
         self._stop_min.trace_add('write', lambda *_: self._fmt_min_and_save())
         self._stop_timer_enabled.trace_add('write', lambda *_: self._save_if_valid())
 
+    def _build_separator(self) -> None:
+        sep = tk.Frame(self, height=1)
+        sep.pack(fill='x', padx=12, pady=(4, 4))
+        self._tw['borders'].append(sep)
+
     def _build_controls(self) -> None:
         f = tk.Frame(self)
-        f.pack(pady=(8, 8))
+        f.pack(pady=(4, 4))
         self._tw['bg_frames'].append(f)
         self._toggle_sw = _Toggle(f, command=self._on_toggle)
         self._toggle_sw.pack()
 
-    def _build_status(self) -> None:
-        sep = tk.Frame(self, height=1)
-        sep.pack(fill='x', padx=12)
-        self._tw['borders'].append(sep)
-
-        f = tk.Frame(self)
-        f.pack(fill='x', padx=12, pady=3)
-        self._tw['bg_frames'].append(f)
-
-        self._status = tk.StringVar(value='待機中')
-        lbl = tk.Label(f, textvariable=self._status,
-                        font=('Helvetica', 10), anchor='center')
-        lbl.pack(fill='x')
-        self._tw['labels'].append(lbl)
-
     def _build_tray_setting(self) -> None:
-        sep = tk.Frame(self, height=1)
-        sep.pack(fill='x', padx=12)
-        self._tw['borders'].append(sep)
-
         f = tk.Frame(self)
-        f.pack(fill='x', padx=12, pady=(4, 6))
+        f.pack(fill='x', padx=12, pady=(2, 8))
         self._tw['bg_frames'].append(f)
 
         self._tray_minimize = tk.BooleanVar(value=True)
         tray_cb = tk.Checkbutton(
             f, variable=self._tray_minimize,
-            text='最小化時にタスクトレイに格納する',
+            text='最小化でタスクトレイ格納',
             font=('Helvetica', 8),
             command=self._save_if_valid,
         )
@@ -426,7 +406,10 @@ class App(tk.Tk):
         if self._tray_icon is None:
             return
         running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
-        self._tray_icon.icon = _make_tray_icon(running)
+        try:
+            self._tray_icon.icon = _make_tray_icon(running)
+        except Exception:
+            pass
 
     # ── window events ─────────────────────────────────────────────────────
 
@@ -460,7 +443,14 @@ class App(tk.Tk):
         if self._tray_icon is not None:
             return
         running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
-        img = _make_tray_icon(running)
+        try:
+            img = _make_tray_icon(running)
+        except Exception:
+            from PIL import Image as PILImage
+            try:
+                img = PILImage.open(_res('icon.png'))
+            except Exception:
+                img = PILImage.new('RGB', (64, 64), '#4A90D9')
         menu = pystray.Menu(
             pystray.MenuItem('タスクトレイから出す', self._tray_restore, default=True),
             pystray.MenuItem('終了', self._tray_quit),
