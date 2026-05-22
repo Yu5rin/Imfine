@@ -6,11 +6,10 @@ import tkinter as tk
 from tkinter import messagebox
 
 import settings
-import updater
 from controller import Controller
 
 
-VERSION = '1.6.7'
+VERSION = '1.7.0'
 
 THEMES: dict = {
     'light': {
@@ -20,7 +19,6 @@ THEMES: dict = {
         'ENTRY_BG': '#FFFFFF',
         'BTN_BG':   '#E8E8E8',
         'BORDER':   '#CCCCCC',
-        'STOP_BG':  '#E8E8E8',
     },
     'dark': {
         'BG':       '#1E1E1E',
@@ -29,16 +27,102 @@ THEMES: dict = {
         'ENTRY_BG': '#2D2D2D',
         'BTN_BG':   '#3C3C3C',
         'BORDER':   '#444444',
-        'STOP_BG':  '#3C3C3C',
     },
 }
-START_BG = '#4A90D9'
 
 
 def _res(name: str) -> str:
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, name)
     return name
+
+
+def _make_tray_icon(running: bool):
+    """Generate tray icon. Green body when running, white when idle."""
+    from PIL import Image as PILImage, ImageDraw
+    size = 64
+    img = PILImage.new('RGBA', (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    s = size
+    cx = s // 2
+    outline = max(2, int(s * 0.045))
+    dark = '#333333'
+    body_fill = '#4CAF50' if running else 'white'
+    ml, mr = int(s * 0.25), int(s * 0.75)
+    mt, mb = int(s * 0.08), int(s * 0.85)
+    radius = int(s * 0.22)
+    d.rounded_rectangle([ml, mt, mr, mb], radius=radius,
+                         fill=body_fill, outline=dark, width=outline)
+    split_y = int(s * 0.40)
+    d.line([(ml + outline, split_y), (mr - outline, split_y)],
+           fill=dark, width=outline)
+    d.line([(cx, mt + outline), (cx, split_y)],
+           fill=dark, width=outline)
+    ww = max(2, int(s * 0.06))
+    wh = max(4, int(s * 0.11))
+    wy = int(s * 0.20)
+    d.rounded_rectangle(
+        [cx - ww, wy, cx + ww, wy + wh * 2],
+        radius=max(1, int(s * 0.025)),
+        fill='#E94560',
+    )
+    cable_w = max(2, int(s * 0.05))
+    cable_top = max(0, mt - int(s * 0.10))
+    d.rectangle([cx - cable_w, cable_top, cx + cable_w, mt + outline],
+                fill=dark)
+    return img
+
+
+class _Toggle(tk.Canvas):
+    W, H = 200, 72
+    R = 36
+
+    def __init__(self, parent, command=None):
+        super().__init__(parent, width=self.W, height=self.H,
+                         bd=0, highlightthickness=0)
+        self._on = False
+        self._cmd = command
+        self._bg = '#F5F5F5'
+        self.bind('<Button-1>', lambda _: self._click())
+        self._redraw()
+
+    def _click(self) -> None:
+        self._on = not self._on
+        self._redraw()
+        if self._cmd:
+            self._cmd(self._on)
+
+    def set_state(self, on: bool) -> None:
+        if self._on != on:
+            self._on = on
+            self._redraw()
+
+    def configure_bg(self, bg: str) -> None:
+        self._bg = bg
+        self.config(bg=bg)
+        self._redraw()
+
+    def _redraw(self) -> None:
+        self.delete('all')
+        color = '#4CAF50' if self._on else '#9E9E9E'
+        W, H, R = self.W, self.H, self.R
+        self._pill(color, 0, 0, W, H)
+        pad = 5
+        kx = W - R if self._on else R
+        ky = H // 2
+        self.create_oval(kx - R + pad, ky - R + pad,
+                         kx + R - pad, ky + R - pad,
+                         fill='white', outline='')
+        lx = W // 4 if self._on else 3 * W // 4
+        self.create_text(lx, H // 2,
+                         text='ON' if self._on else 'OFF',
+                         fill='white', font=('Helvetica', 16, 'bold'))
+
+    def _pill(self, color: str, x0: int, y0: int, x1: int, y1: int) -> None:
+        r = (y1 - y0) // 2
+        self.create_oval(x0, y0, x0 + 2 * r, y1, fill=color, outline='')
+        self.create_oval(x1 - 2 * r, y0, x1, y1, fill=color, outline='')
+        self.create_rectangle(x0 + r, y0, x1 - r, y1, fill=color, outline='')
 
 
 class App(tk.Tk):
@@ -74,7 +158,7 @@ class App(tk.Tk):
         self._going_to_tray = False
         self._stop_triggered = False
         self._stop_target: datetime.datetime | None = None
-        self._tray_minimize: tk.BooleanVar  # set in _build_footer
+        self._tray_minimize: tk.BooleanVar
 
         self._tw: dict[str, list] = {
             'bg_frames': [],
@@ -103,7 +187,6 @@ class App(tk.Tk):
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         self.bind('<Unmap>', self._on_unmap)
         self.after(1000, self._check_stop_timer)
-        self.after(2000, self._check_update)
 
     # ── layout ────────────────────────────────────────────────────────────
 
@@ -127,15 +210,6 @@ class App(tk.Tk):
         f = tk.Frame(self)
         f.pack(fill='x', padx=12, pady=(6, 2))
         self._tw['bg_frames'].append(f)
-
-        update_btn = tk.Button(
-            f, text='更新',
-            font=('Helvetica', 8),
-            relief='solid', bd=1, padx=8, pady=2,
-            cursor='hand2', command=lambda: self._check_update(manual=True),
-        )
-        update_btn.pack(side='right', padx=(4, 0))
-        self._tw['btns'].append(update_btn)
 
         self._toggle_btn = tk.Button(
             f, text='ダーク',
@@ -191,24 +265,10 @@ class App(tk.Tk):
 
     def _build_controls(self) -> None:
         f = tk.Frame(self)
-        f.pack(pady=(6, 4))
+        f.pack(pady=(8, 8))
         self._tw['bg_frames'].append(f)
-
-        self._start_btn = tk.Button(
-            f, text='START', bg=START_BG, fg='white',
-            font=('Helvetica', 12, 'bold'), padx=20, pady=4,
-            relief='flat', cursor='hand2', command=self._on_start,
-            activebackground='#3A7BC8', activeforeground='white',
-        )
-        self._start_btn.pack(side='left', padx=6)
-
-        self._stop_btn = tk.Button(
-            f, text='STOP',
-            font=('Helvetica', 12, 'bold'), padx=20, pady=4,
-            relief='solid', bd=1, cursor='hand2', command=self._on_stop,
-            state='disabled',
-        )
-        self._stop_btn.pack(side='left', padx=6)
+        self._toggle_sw = _Toggle(f, command=self._on_toggle)
+        self._toggle_sw.pack()
 
     def _build_status(self) -> None:
         sep = tk.Frame(self, height=1)
@@ -263,10 +323,9 @@ class App(tk.Tk):
                                                      selectcolor=t['ENTRY_BG'],
                                                      activebackground=t['BG'],
                                                      activeforeground=t['TEXT'])
-        self._stop_btn.configure(bg=t['STOP_BG'], fg=t['TEXT'],
-                                  activebackground=t['ENTRY_BG'],
-                                  activeforeground=t['TEXT'])
         self._toggle_btn.configure(text='ライト' if self._dark else 'ダーク')
+        if hasattr(self, '_toggle_sw'):
+            self._toggle_sw.configure_bg(t['BG'])
 
     def _toggle_theme(self) -> None:
         self._dark = not self._dark
@@ -309,32 +368,6 @@ class App(tk.Tk):
         if cfg:
             settings.save(cfg)
 
-    def _check_update(self, manual: bool = False) -> None:
-        if manual:
-            self._status.set('更新を確認中...')
-        def on_available(tag: str, url: str) -> None:
-            self.after(0, lambda: self._prompt_update(tag, url))
-        def on_up_to_date(tag, err=None) -> None:
-            if manual:
-                if tag:
-                    msg = '最新版です。'
-                elif err:
-                    msg = f'確認に失敗: {err[:40]}'
-                else:
-                    msg = '確認に失敗しました。'
-                self.after(0, lambda: self._status.set(msg))
-        updater.check_and_prompt(VERSION, on_available,
-                                 on_up_to_date=on_up_to_date if manual else None)
-
-    def _prompt_update(self, tag: str, url: str) -> None:
-        if messagebox.askyesno('Mouser',
-                f'新しいバージョン {tag} があります。\n今すぐアップデートしますか？'):
-            self._status.set('ダウンロード中...')
-            threading.Thread(
-                target=lambda: updater.download_and_replace(url),
-                daemon=True,
-            ).start()
-
     def _fmt_min_and_save(self) -> None:
         if self._loading:
             return
@@ -360,17 +393,23 @@ class App(tk.Tk):
         except (ValueError, AttributeError):
             return None
 
+    def _on_toggle(self, on: bool) -> None:
+        if on:
+            self._on_start()
+        else:
+            self._on_stop()
+
     def _on_start(self) -> None:
         self._stop_triggered = False
         self._stop_target = self._calc_stop_target()
         self._ctrl.start()
-        self._start_btn.config(state='disabled')
-        self._stop_btn.config(state='normal')
+        self._toggle_sw.set_state(True)
+        self._update_tray_icon()
 
     def _on_stop(self) -> None:
         self._ctrl.stop()
-        self._start_btn.config(state='normal')
-        self._stop_btn.config(state='disabled')
+        self._toggle_sw.set_state(False)
+        self._update_tray_icon()
 
     def _check_stop_timer(self) -> None:
         if (self._stop_timer_enabled.get()
@@ -382,6 +421,12 @@ class App(tk.Tk):
                 self._stop_triggered = True
                 self._on_stop()
         self.after(1000, self._check_stop_timer)
+
+    def _update_tray_icon(self) -> None:
+        if self._tray_icon is None:
+            return
+        running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
+        self._tray_icon.icon = _make_tray_icon(running)
 
     # ── window events ─────────────────────────────────────────────────────
 
@@ -407,7 +452,6 @@ class App(tk.Tk):
     def _minimize_to_tray(self) -> None:
         try:
             import pystray
-            from PIL import Image as PILImage
         except ImportError:
             return
         self._going_to_tray = True
@@ -415,10 +459,8 @@ class App(tk.Tk):
         self._going_to_tray = False
         if self._tray_icon is not None:
             return
-        try:
-            img = PILImage.open(_res('icon.png'))
-        except Exception:
-            img = PILImage.new('RGB', (64, 64), '#4A90D9')
+        running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
+        img = _make_tray_icon(running)
         menu = pystray.Menu(
             pystray.MenuItem('タスクトレイから出す', self._tray_restore, default=True),
             pystray.MenuItem('終了', self._tray_quit),
