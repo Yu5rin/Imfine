@@ -19,7 +19,7 @@ a = Analysis(
         'unittest', 'pydoc', 'doctest', 'test',
         'pkg_resources', 'setuptools', 'distutils',
         'sqlite3', 'csv',
-        'difflib', 'fractions',
+        'difflib',
         'tarfile', 'gzip', 'bz2', 'lzma',
         'ftplib', 'smtplib', 'imaplib', 'poplib',
         # PIL format plugins (BmpImagePlugin/PngImagePlugin は pystray が使用するため除外不可)

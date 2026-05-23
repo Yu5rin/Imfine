@@ -463,9 +463,12 @@ class App(tk.Tk):
         _app = self
 
         def _run_icon():
+            def _setup(icon):
+                _tray_log('setup: icon.visible=True')
+                icon.visible = True
             _tray_log('icon.run() starting')
             try:
-                _icon_ref.run()
+                _icon_ref.run(setup=_setup)
                 _tray_log('icon.run() ended normally')
             except Exception as e:
                 _tray_log(f'icon.run() failed: {e}')
