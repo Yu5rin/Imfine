@@ -9,19 +9,22 @@ a = Analysis(
     hiddenimports=[
         'controller', 'settings',
         'PIL.BmpImagePlugin', 'PIL.PngImagePlugin',
+        'PIL.ImageTk', 'PIL.ImageDraw', 'PIL.ImageFont',
         'pystray', 'pystray._win32', 'pystray._base',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # unused stdlib (PyInstaller内部依存を避けた安全なもののみ)
+        # unused stdlib
         'unittest', 'pydoc', 'doctest', 'test',
         'pkg_resources', 'setuptools', 'distutils',
         'sqlite3', 'csv',
         'difflib',
         'tarfile', 'gzip', 'bz2', 'lzma',
         'ftplib', 'smtplib', 'imaplib', 'poplib',
+        'xmlrpc', 'pydoc_data', 'lib2to3',
+        'asyncio', 'concurrent', 'multiprocessing',
         # PIL format plugins (BmpImagePlugin/PngImagePlugin/IcoImagePlugin は
         # pystray の HICON 生成に必要なため除外不可)
         'PIL.GifImagePlugin',
@@ -38,7 +41,7 @@ a = Analysis(
         'PIL.SunImagePlugin',
     ],
     noarchive=False,
-    optimize=0,
+    optimize=2,
 )
 pyz = PYZ(a.pure)
 
@@ -51,7 +54,7 @@ exe = EXE(
     name='Mouser',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=True,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,

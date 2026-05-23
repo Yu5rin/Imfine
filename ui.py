@@ -1,9 +1,10 @@
 import datetime
 import os
 import sys
-import threading
 import tkinter as tk
 from tkinter import messagebox
+
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 import settings
 from controller import Controller
@@ -37,23 +38,10 @@ def _res(name: str) -> str:
     return name
 
 
-def _tray_log(msg: str) -> None:
-    import tempfile
-    try:
-        import datetime as _dt
-        path = os.path.join(tempfile.gettempdir(), 'mouser_tray.log')
-        with open(path, 'a', encoding='utf-8') as f:
-            f.write(f'[{_dt.datetime.now():%H:%M:%S}] {msg}\n')
-    except Exception:
-        pass
-
-
 def _load_tray_image(running: bool):
-    from PIL import Image as PILImage
     import PIL.BmpImagePlugin  # noqa: F401  pystray HICON 生成に必要
-    import PIL.PngImagePlugin  # noqa: F401  icon.png 読み込みに必要
-    img = PILImage.open(_res('icon.png')).convert('RGBA')
-    img = img.resize((64, 64), PILImage.LANCZOS)
+    img = Image.open(_res('icon.png')).convert('RGBA')
+    img = img.resize((64, 64), Image.LANCZOS)
     if running:
         pixels = img.load()
         for y in range(img.height):
@@ -67,13 +55,16 @@ def _load_tray_image(running: bool):
 class _Toggle(tk.Canvas):
     W, H = 200, 72
     R = 36
+    S = 4
     ANIM_MS = 16
     ANIM_EASE = 0.22
 
     OFF_BG = (158, 158, 158)
-    ON_BG = (76, 175, 80)
-    OFF_EDGE = (110, 110, 110)
-    ON_EDGE = (50, 130, 55)
+    ON_BG  = (76, 175, 80)
+    OFF_E  = (110, 110, 110)
+    ON_E   = (50, 130, 55)
+
+    _font_cache = None
 
     def __init__(self, parent, command=None):
         super().__init__(parent, width=self.W, height=self.H,
@@ -81,10 +72,24 @@ class _Toggle(tk.Canvas):
         self._on = False
         self._pos = 0.0
         self._cmd = command
-        self._bg = '#F5F5F5'
         self._anim_id: str | None = None
+        self._photo: ImageTk.PhotoImage | None = None
         self.bind('<Button-1>', lambda _: self._click())
         self._redraw()
+
+    @classmethod
+    def _font(cls):
+        if cls._font_cache is not None:
+            return cls._font_cache
+        size = 14 * cls.S
+        for name in ('arialbd.ttf', 'segoeuib.ttf', 'DejaVuSans-Bold.ttf'):
+            try:
+                cls._font_cache = ImageFont.truetype(name, size)
+                return cls._font_cache
+            except OSError:
+                pass
+        cls._font_cache = ImageFont.load_default()
+        return cls._font_cache
 
     def _click(self) -> None:
         self._on = not self._on
@@ -98,7 +103,6 @@ class _Toggle(tk.Canvas):
             self._animate()
 
     def configure_bg(self, bg: str) -> None:
-        self._bg = bg
         self.config(bg=bg)
         self._redraw()
 
@@ -121,71 +125,50 @@ class _Toggle(tk.Canvas):
         self._anim_id = self.after(self.ANIM_MS, self._step_anim)
 
     @staticmethod
-    def _mix(c0: tuple, c1: tuple, t: float) -> str:
-        r = int(c0[0] + (c1[0] - c0[0]) * t)
-        g = int(c0[1] + (c1[1] - c0[1]) * t)
-        b = int(c0[2] + (c1[2] - c0[2]) * t)
-        return f'#{r:02x}{g:02x}{b:02x}'
+    def _mix(c0: tuple, c1: tuple, t: float) -> tuple:
+        return tuple(int(a + (b - a) * t) for a, b in zip(c0, c1))
 
     def _redraw(self) -> None:
-        self.delete('all')
-        W, H, R = self.W, self.H, self.R
+        s = self.S
+        W, H, R = self.W * s, self.H * s, self.R * s
         t = self._pos
+        img = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
 
-        bg_color = self._mix(self.OFF_BG, self.ON_BG, t)
-        self._pill(bg_color, 0, 0, W, H)
+        bg = self._mix(self.OFF_BG, self.ON_BG, t) + (255,)
+        edge = self._mix(self.OFF_E, self.ON_E, t) + (255,)
 
-        edge_color = self._mix(self.OFF_EDGE, self.ON_EDGE, t)
-        self.create_arc(1, 1, 2 * R - 1, H - 1,
-                        start=90, extent=180,
-                        style='arc', outline=edge_color, width=1)
-        self.create_arc(W - 2 * R + 1, 1, W - 1, H - 1,
-                        start=270, extent=180,
-                        style='arc', outline=edge_color, width=1)
-        self.create_line(R, 1, W - R, 1, fill=edge_color)
-        self.create_line(R, H - 1, W - R, H - 1, fill=edge_color)
+        d.rounded_rectangle([0, 0, W - 1, H - 1], radius=R, fill=bg)
+        d.rounded_rectangle([s, s, W - 1 - s, H - 1 - s],
+                            radius=R - s, outline=edge, width=s)
 
         kx = R + t * (W - 2 * R)
         ky = H / 2
-        kr = R - 6
+        kr = R - 6 * s
 
-        self.create_oval(kx - kr, ky - kr + 3,
-                         kx + kr, ky + kr + 4,
-                         fill='#222222', outline='', stipple='gray50')
+        d.ellipse([kx - kr, ky - kr + 3 * s,
+                   kx + kr, ky + kr + 5 * s],
+                  fill=(0, 0, 0, 90))
+        d.ellipse([kx - kr, ky - kr, kx + kr, ky + kr],
+                  fill=(255, 255, 255, 255),
+                  outline=(200, 200, 200, 255), width=s)
+        d.arc([kx - kr + 4 * s, ky - kr + 4 * s,
+               kx + kr - 4 * s, ky + kr - 4 * s],
+              200, 320, fill=(255, 255, 255, 220), width=2 * s)
 
-        self.create_oval(kx - kr, ky - kr,
-                         kx + kr, ky + kr,
-                         fill='white', outline='#cccccc', width=1)
+        text = 'ON' if t > 0.5 else 'OFF'
+        tx = R + (W - 2 * R) * (0.25 if t > 0.5 else 0.75)
+        ty = H / 2
+        font = self._font()
+        d.text((tx, ty + s), text, font=font, anchor='mm',
+               fill=(26, 74, 31, 255) if t > 0.5 else (85, 85, 85, 255))
+        d.text((tx, ty), text, font=font, anchor='mm',
+               fill=(255, 255, 255, 255))
 
-        self.create_arc(kx - kr + 3, ky - kr + 3,
-                        kx + kr - 3, ky + kr - 3,
-                        start=40, extent=110,
-                        style='arc', outline='#f4f4f4', width=2)
-
-        if t > 0.5:
-            self.create_text(R + (W - 2 * R) * 0.25, ky + 1,
-                             text='ON',
-                             fill='#1a4a1f',
-                             font=('Helvetica', 14, 'bold'))
-            self.create_text(R + (W - 2 * R) * 0.25, ky,
-                             text='ON',
-                             fill='white',
-                             font=('Helvetica', 14, 'bold'))
-        else:
-            self.create_text(R + (W - 2 * R) * 0.75, ky + 1,
-                             text='OFF',
-                             fill='#555555',
-                             font=('Helvetica', 14, 'bold'))
-            self.create_text(R + (W - 2 * R) * 0.75, ky,
-                             text='OFF',
-                             fill='white',
-                             font=('Helvetica', 14, 'bold'))
-
-    def _pill(self, color: str, x0: int, y0: int, x1: int, y1: int) -> None:
-        r = (y1 - y0) // 2
-        self.create_oval(x0, y0, x0 + 2 * r, y1, fill=color, outline='')
-        self.create_oval(x1 - 2 * r, y0, x1, y1, fill=color, outline='')
-        self.create_rectangle(x0 + r, y0, x1 - r, y1, fill=color, outline='')
+        img = img.resize((self.W, self.H), Image.LANCZOS)
+        self._photo = ImageTk.PhotoImage(img)
+        self.delete('all')
+        self.create_image(0, 0, anchor='nw', image=self._photo)
 
 
 class App(tk.Tk):
@@ -496,30 +479,21 @@ class App(tk.Tk):
             self._minimize_to_tray()
 
     def _minimize_to_tray(self) -> None:
-        _tray_log('_minimize_to_tray called')
         try:
             import pystray
-            _tray_log('pystray OK')
-            from PIL import Image as PILImage
-            _tray_log('PIL OK')
-        except ImportError as e:
-            _tray_log(f'ImportError: {e}')
+        except ImportError:
             return
         if self._tray_icon is not None:
-            _tray_log('already in tray, withdrawing')
             self._going_to_tray = True
             self.withdraw()
             self._going_to_tray = False
             return
         running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
-        _tray_log(f'running={running}')
         try:
             img = _load_tray_image(running)
-            _tray_log(f'image OK: size={img.size} mode={img.mode}')
-        except Exception as e:
-            _tray_log(f'image failed: {e}')
-            img = PILImage.new('RGB', (64, 64),
-                               '#4CAF50' if running else '#4A90D9')
+        except Exception:
+            img = Image.new('RGB', (64, 64),
+                            '#4CAF50' if running else '#4A90D9')
         menu = pystray.Menu(
             pystray.MenuItem('タスクトレイから出す',
                              self._tray_restore, default=True),
@@ -527,26 +501,14 @@ class App(tk.Tk):
         )
         try:
             self._tray_icon = pystray.Icon('Mouser', img, 'Mouser', menu)
-            _tray_log('pystray.Icon created')
-        except Exception as e:
-            _tray_log(f'pystray.Icon failed: {e}')
-            self._tray_icon = None
-            return
-        try:
-            _tray_log('run_detached starting')
             self._tray_icon.run_detached()
-            _tray_log('run_detached returned')
             self._tray_icon.visible = True
-            _tray_log('visible=True set')
-        except Exception as e:
-            _tray_log(f'run_detached failed: {e}')
+        except Exception:
             self._tray_icon = None
             return
-        _tray_log('withdrawing window')
         self._going_to_tray = True
         self.withdraw()
         self._going_to_tray = False
-        _tray_log('withdraw done')
 
     def _tray_restore(self, icon=None, item=None) -> None:
         icon_ref = self._tray_icon
