@@ -38,12 +38,9 @@ def _res(name: str) -> str:
 
 
 def _load_tray_image(running: bool):
-    """Load icon.png and tint white body green when running.
-
-    Use same load path as v1.3.2 (PILImage.open) since in-memory ImageDraw
-    creation has been unreliable in PyInstaller windowed exe.
-    """
     from PIL import Image as PILImage
+    import PIL.BmpImagePlugin  # noqa: F401  pystray HICON 生成に必要
+    import PIL.PngImagePlugin  # noqa: F401  icon.png 読み込みに必要
     img = PILImage.open(_res('icon.png')).convert('RGBA')
     if running:
         pixels = img.load()
@@ -438,11 +435,20 @@ class App(tk.Tk):
         )
         try:
             self._tray_icon = pystray.Icon('Mouser', img, 'Mouser', menu)
-            threading.Thread(target=self._tray_icon.run,
-                             daemon=True).start()
         except Exception:
             self._tray_icon = None
             return
+        _icon_ref = self._tray_icon
+        _app = self
+
+        def _run_icon():
+            try:
+                _icon_ref.run()
+            except Exception:
+                _app._tray_icon = None
+                _app.after(0, _app.deiconify)
+
+        threading.Thread(target=_run_icon, daemon=True).start()
         self._going_to_tray = True
         self.withdraw()
         self._going_to_tray = False
