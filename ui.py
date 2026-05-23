@@ -460,24 +460,17 @@ class App(tk.Tk):
             _tray_log(f'pystray.Icon failed: {e}')
             self._tray_icon = None
             return
-        _icon_ref = self._tray_icon
-        _app = self
-
-        def _run_icon():
-            def _setup(icon):
-                _tray_log('setup: icon.visible=True')
-                icon.visible = True
-            _tray_log('icon.run() starting')
-            try:
-                _icon_ref.run(setup=_setup)
-                _tray_log('icon.run() ended normally')
-            except Exception as e:
-                _tray_log(f'icon.run() failed: {e}')
-                _app._tray_icon = None
-                _app.after(0, _app.deiconify)
-
-        threading.Thread(target=_run_icon, daemon=True).start()
-        _tray_log('thread started, withdrawing window')
+        try:
+            _tray_log('run_detached starting')
+            self._tray_icon.run_detached()
+            _tray_log('run_detached returned')
+            self._tray_icon.visible = True
+            _tray_log('visible=True set')
+        except Exception as e:
+            _tray_log(f'run_detached failed: {e}')
+            self._tray_icon = None
+            return
+        _tray_log('withdrawing window')
         self._going_to_tray = True
         self.withdraw()
         self._going_to_tray = False
