@@ -6,7 +6,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('icon.ico', '.'), ('icon.png', '.')],
-    hiddenimports=['controller', 'settings', 'PIL.BmpImagePlugin', 'PIL.PngImagePlugin'],
+    hiddenimports=[
+        'controller', 'settings',
+        'PIL.BmpImagePlugin', 'PIL.PngImagePlugin',
+        'pystray', 'pystray._win32', 'pystray._base',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
