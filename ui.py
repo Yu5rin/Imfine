@@ -9,7 +9,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.7.0'
+VERSION = '1.8.0'
 
 THEMES: dict = {
     'light': {
@@ -67,47 +67,119 @@ def _load_tray_image(running: bool):
 class _Toggle(tk.Canvas):
     W, H = 200, 72
     R = 36
+    ANIM_MS = 16
+    ANIM_EASE = 0.22
+
+    OFF_BG = (158, 158, 158)
+    ON_BG = (76, 175, 80)
+    OFF_EDGE = (110, 110, 110)
+    ON_EDGE = (50, 130, 55)
 
     def __init__(self, parent, command=None):
         super().__init__(parent, width=self.W, height=self.H,
                          bd=0, highlightthickness=0)
         self._on = False
+        self._pos = 0.0
         self._cmd = command
         self._bg = '#F5F5F5'
+        self._anim_id: str | None = None
         self.bind('<Button-1>', lambda _: self._click())
         self._redraw()
 
     def _click(self) -> None:
         self._on = not self._on
-        self._redraw()
         if self._cmd:
             self._cmd(self._on)
+        self._animate()
 
     def set_state(self, on: bool) -> None:
         if self._on != on:
             self._on = on
-            self._redraw()
+            self._animate()
 
     def configure_bg(self, bg: str) -> None:
         self._bg = bg
         self.config(bg=bg)
         self._redraw()
 
+    def _animate(self) -> None:
+        if self._anim_id is not None:
+            self.after_cancel(self._anim_id)
+            self._anim_id = None
+        self._step_anim()
+
+    def _step_anim(self) -> None:
+        target = 1.0 if self._on else 0.0
+        diff = target - self._pos
+        if abs(diff) < 0.005:
+            self._pos = target
+            self._redraw()
+            self._anim_id = None
+            return
+        self._pos += diff * self.ANIM_EASE
+        self._redraw()
+        self._anim_id = self.after(self.ANIM_MS, self._step_anim)
+
+    @staticmethod
+    def _mix(c0: tuple, c1: tuple, t: float) -> str:
+        r = int(c0[0] + (c1[0] - c0[0]) * t)
+        g = int(c0[1] + (c1[1] - c0[1]) * t)
+        b = int(c0[2] + (c1[2] - c0[2]) * t)
+        return f'#{r:02x}{g:02x}{b:02x}'
+
     def _redraw(self) -> None:
         self.delete('all')
-        color = '#4CAF50' if self._on else '#9E9E9E'
         W, H, R = self.W, self.H, self.R
-        self._pill(color, 0, 0, W, H)
-        pad = 5
-        kx = W - R if self._on else R
-        ky = H // 2
-        self.create_oval(kx - R + pad, ky - R + pad,
-                         kx + R - pad, ky + R - pad,
-                         fill='white', outline='')
-        lx = W // 4 if self._on else 3 * W // 4
-        self.create_text(lx, H // 2,
-                         text='ON' if self._on else 'OFF',
-                         fill='white', font=('Helvetica', 16, 'bold'))
+        t = self._pos
+
+        bg_color = self._mix(self.OFF_BG, self.ON_BG, t)
+        self._pill(bg_color, 0, 0, W, H)
+
+        edge_color = self._mix(self.OFF_EDGE, self.ON_EDGE, t)
+        self.create_arc(1, 1, 2 * R - 1, H - 1,
+                        start=90, extent=180,
+                        style='arc', outline=edge_color, width=1)
+        self.create_arc(W - 2 * R + 1, 1, W - 1, H - 1,
+                        start=270, extent=180,
+                        style='arc', outline=edge_color, width=1)
+        self.create_line(R, 1, W - R, 1, fill=edge_color)
+        self.create_line(R, H - 1, W - R, H - 1, fill=edge_color)
+
+        kx = R + t * (W - 2 * R)
+        ky = H / 2
+        kr = R - 6
+
+        self.create_oval(kx - kr, ky - kr + 3,
+                         kx + kr, ky + kr + 4,
+                         fill='#222222', outline='', stipple='gray50')
+
+        self.create_oval(kx - kr, ky - kr,
+                         kx + kr, ky + kr,
+                         fill='white', outline='#cccccc', width=1)
+
+        self.create_arc(kx - kr + 3, ky - kr + 3,
+                        kx + kr - 3, ky + kr - 3,
+                        start=40, extent=110,
+                        style='arc', outline='#f4f4f4', width=2)
+
+        if t > 0.5:
+            self.create_text(R + (W - 2 * R) * 0.25, ky + 1,
+                             text='ON',
+                             fill='#1a4a1f',
+                             font=('Helvetica', 14, 'bold'))
+            self.create_text(R + (W - 2 * R) * 0.25, ky,
+                             text='ON',
+                             fill='white',
+                             font=('Helvetica', 14, 'bold'))
+        else:
+            self.create_text(R + (W - 2 * R) * 0.75, ky + 1,
+                             text='OFF',
+                             fill='#555555',
+                             font=('Helvetica', 14, 'bold'))
+            self.create_text(R + (W - 2 * R) * 0.75, ky,
+                             text='OFF',
+                             fill='white',
+                             font=('Helvetica', 14, 'bold'))
 
     def _pill(self, color: str, x0: int, y0: int, x1: int, y1: int) -> None:
         r = (y1 - y0) // 2
