@@ -37,39 +37,21 @@ def _res(name: str) -> str:
     return name
 
 
-def _make_tray_icon(running: bool):
-    """Generate tray icon. Green body when running, white when idle."""
-    from PIL import Image as PILImage, ImageDraw
-    size = 64
-    img = PILImage.new('RGBA', (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    s = size
-    cx = s // 2
-    outline = max(2, int(s * 0.045))
-    dark = '#333333'
-    body_fill = '#4CAF50' if running else 'white'
-    ml, mr = int(s * 0.25), int(s * 0.75)
-    mt, mb = int(s * 0.08), int(s * 0.85)
-    radius = int(s * 0.22)
-    d.rounded_rectangle([ml, mt, mr, mb], radius=radius,
-                         fill=body_fill, outline=dark, width=outline)
-    split_y = int(s * 0.40)
-    d.line([(ml + outline, split_y), (mr - outline, split_y)],
-           fill=dark, width=outline)
-    d.line([(cx, mt + outline), (cx, split_y)],
-           fill=dark, width=outline)
-    ww = max(2, int(s * 0.06))
-    wh = max(4, int(s * 0.11))
-    wy = int(s * 0.20)
-    d.rounded_rectangle(
-        [cx - ww, wy, cx + ww, wy + wh * 2],
-        radius=max(1, int(s * 0.025)),
-        fill='#E94560',
-    )
-    cable_w = max(2, int(s * 0.05))
-    cable_top = max(0, mt - int(s * 0.10))
-    d.rectangle([cx - cable_w, cable_top, cx + cable_w, mt + outline],
-                fill=dark)
+def _load_tray_image(running: bool):
+    """Load icon.png and tint white body green when running.
+
+    Use same load path as v1.3.2 (PILImage.open) since in-memory ImageDraw
+    creation has been unreliable in PyInstaller windowed exe.
+    """
+    from PIL import Image as PILImage
+    img = PILImage.open(_res('icon.png')).convert('RGBA')
+    if running:
+        pixels = img.load()
+        for y in range(img.height):
+            for x in range(img.width):
+                r, g, b, a = pixels[x, y]
+                if a > 100 and r > 200 and g > 200 and b > 200:
+                    pixels[x, y] = (76, 175, 80, a)
     return img
 
 
@@ -407,7 +389,7 @@ class App(tk.Tk):
             return
         running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
         try:
-            self._tray_icon.icon = _make_tray_icon(running)
+            self._tray_icon.icon = _load_tray_image(running)
         except Exception:
             pass
 
@@ -435,28 +417,35 @@ class App(tk.Tk):
     def _minimize_to_tray(self) -> None:
         try:
             import pystray
+            from PIL import Image as PILImage
         except ImportError:
+            return
+        if self._tray_icon is not None:
+            self._going_to_tray = True
+            self.withdraw()
+            self._going_to_tray = False
+            return
+        running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
+        try:
+            img = _load_tray_image(running)
+        except Exception:
+            img = PILImage.new('RGB', (64, 64),
+                               '#4CAF50' if running else '#4A90D9')
+        menu = pystray.Menu(
+            pystray.MenuItem('タスクトレイから出す',
+                             self._tray_restore, default=True),
+            pystray.MenuItem('終了', self._tray_quit),
+        )
+        try:
+            self._tray_icon = pystray.Icon('Mouser', img, 'Mouser', menu)
+            threading.Thread(target=self._tray_icon.run,
+                             daemon=True).start()
+        except Exception:
+            self._tray_icon = None
             return
         self._going_to_tray = True
         self.withdraw()
         self._going_to_tray = False
-        if self._tray_icon is not None:
-            return
-        running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
-        try:
-            img = _make_tray_icon(running)
-        except Exception:
-            from PIL import Image as PILImage
-            try:
-                img = PILImage.open(_res('icon.png'))
-            except Exception:
-                img = PILImage.new('RGB', (64, 64), '#4A90D9')
-        menu = pystray.Menu(
-            pystray.MenuItem('タスクトレイから出す', self._tray_restore, default=True),
-            pystray.MenuItem('終了', self._tray_quit),
-        )
-        self._tray_icon = pystray.Icon('Mouser', img, 'Mouser', menu)
-        threading.Thread(target=self._tray_icon.run, daemon=True).start()
 
     def _tray_restore(self, icon=None, item=None) -> None:
         icon_ref = self._tray_icon
