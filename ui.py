@@ -37,6 +37,17 @@ def _res(name: str) -> str:
     return name
 
 
+def _tray_log(msg: str) -> None:
+    import tempfile
+    try:
+        import datetime as _dt
+        path = os.path.join(tempfile.gettempdir(), 'mouser_tray.log')
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(f'[{_dt.datetime.now():%H:%M:%S}] {msg}\n')
+    except Exception:
+        pass
+
+
 def _load_tray_image(running: bool):
     from PIL import Image as PILImage
     import PIL.BmpImagePlugin  # noqa: F401  pystray HICON 生成に必要
@@ -412,20 +423,28 @@ class App(tk.Tk):
             self._minimize_to_tray()
 
     def _minimize_to_tray(self) -> None:
+        _tray_log('_minimize_to_tray called')
         try:
             import pystray
+            _tray_log('pystray OK')
             from PIL import Image as PILImage
-        except ImportError:
+            _tray_log('PIL OK')
+        except ImportError as e:
+            _tray_log(f'ImportError: {e}')
             return
         if self._tray_icon is not None:
+            _tray_log('already in tray, withdrawing')
             self._going_to_tray = True
             self.withdraw()
             self._going_to_tray = False
             return
         running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
+        _tray_log(f'running={running}')
         try:
             img = _load_tray_image(running)
-        except Exception:
+            _tray_log(f'image OK: size={img.size} mode={img.mode}')
+        except Exception as e:
+            _tray_log(f'image failed: {e}')
             img = PILImage.new('RGB', (64, 64),
                                '#4CAF50' if running else '#4A90D9')
         menu = pystray.Menu(
@@ -435,23 +454,30 @@ class App(tk.Tk):
         )
         try:
             self._tray_icon = pystray.Icon('Mouser', img, 'Mouser', menu)
-        except Exception:
+            _tray_log('pystray.Icon created')
+        except Exception as e:
+            _tray_log(f'pystray.Icon failed: {e}')
             self._tray_icon = None
             return
         _icon_ref = self._tray_icon
         _app = self
 
         def _run_icon():
+            _tray_log('icon.run() starting')
             try:
                 _icon_ref.run()
-            except Exception:
+                _tray_log('icon.run() ended normally')
+            except Exception as e:
+                _tray_log(f'icon.run() failed: {e}')
                 _app._tray_icon = None
                 _app.after(0, _app.deiconify)
 
         threading.Thread(target=_run_icon, daemon=True).start()
+        _tray_log('thread started, withdrawing window')
         self._going_to_tray = True
         self.withdraw()
         self._going_to_tray = False
+        _tray_log('withdraw done')
 
     def _tray_restore(self, icon=None, item=None) -> None:
         icon_ref = self._tray_icon
