@@ -10,7 +10,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.8.0'
+VERSION = '1.8.1'
 
 THEMES: dict = {
     'light': {
@@ -269,7 +269,6 @@ class App(tk.Tk):
         cb = tk.Checkbutton(
             outer, variable=self._stop_timer_enabled,
             text='有効', font=('Helvetica', 10),
-            command=self._on_stop_timer_toggle,
         )
         cb.pack(side='left')
         self._tw['checks'].append(cb)
@@ -281,7 +280,6 @@ class App(tk.Tk):
             outer, from_=0, to=23, increment=1,
             textvariable=self._stop_hour, width=4,
             relief='solid', bd=1, font=('Helvetica', 10),
-            state='disabled',
         )
         self._stop_hour_sp.pack(side='left', padx=(8, 2))
         self._tw['spinboxes'].append(self._stop_hour_sp)
@@ -294,7 +292,6 @@ class App(tk.Tk):
             outer, from_=0, to=59, increment=1,
             textvariable=self._stop_min, width=4,
             relief='solid', bd=1, font=('Helvetica', 10),
-            state='disabled',
         )
         self._stop_min_sp.pack(side='left', padx=(2, 0))
         self._tw['spinboxes'].append(self._stop_min_sp)
@@ -368,12 +365,6 @@ class App(tk.Tk):
         self._stop_hour.set(str(c.get('stop_hour', 17)))
         self._stop_min.set(f"{c.get('stop_min', 0):02d}")
         self._tray_minimize.set(bool(c.get('tray_minimize', True)))
-        self._on_stop_timer_toggle()
-
-    def _on_stop_timer_toggle(self) -> None:
-        state = 'normal' if self._stop_timer_enabled.get() else 'disabled'
-        self._stop_hour_sp.configure(state=state)
-        self._stop_min_sp.configure(state=state)
 
     def _get_cfg(self) -> dict | None:
         try:
