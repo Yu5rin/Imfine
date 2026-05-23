@@ -53,6 +53,7 @@ def _load_tray_image(running: bool):
     import PIL.BmpImagePlugin  # noqa: F401  pystray HICON 生成に必要
     import PIL.PngImagePlugin  # noqa: F401  icon.png 読み込みに必要
     img = PILImage.open(_res('icon.png')).convert('RGBA')
+    img = img.resize((64, 64), PILImage.LANCZOS)
     if running:
         pixels = img.load()
         for y in range(img.height):
