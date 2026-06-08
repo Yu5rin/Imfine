@@ -71,6 +71,6 @@ jobs:
         run: pyinstaller Mouser.spec
 
       - name: Create release
-        run: gh release create ${{ steps.ver.outputs.tag }} dist/Mouser.exe --title "Mouser ${{ steps.ver.outputs.tag }}" --notes "Mouser ${{ steps.ver.outputs.tag }}"
+        run: gh release create ${{ steps.ver.outputs.tag }} dist/ImFine.exe --title "I'm fine ${{ steps.ver.outputs.tag }}" --notes "I'm fine ${{ steps.ver.outputs.tag }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

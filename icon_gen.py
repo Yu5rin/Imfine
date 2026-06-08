@@ -1,61 +1,36 @@
 from PIL import Image, ImageDraw
 
 
-def _draw_mouse(size: int) -> Image.Image:
-    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+def _draw_available(size: int) -> Image.Image:
+    S = 4
+    w = size * S
+    img = Image.new('RGBA', (w, w), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    s = size
-    cx = s // 2
 
-    outline = max(2, int(s * 0.045))
-    dark = '#333333'
+    pad = max(2, int(w * 0.03))
+    d.ellipse([pad, pad, w - pad - 1, w - pad - 1],
+              fill='#6ABF69', outline='#43A047', width=max(2, int(w * 0.04)))
 
-    # Body: 縦長の角丸長方形
-    ml, mr = int(s * 0.25), int(s * 0.75)
-    mt, mb = int(s * 0.08), int(s * 0.85)
-    radius = int(s * 0.22)
-    d.rounded_rectangle([ml, mt, mr, mb], radius=radius,
-                         fill='white', outline=dark, width=outline)
+    lw = max(3, int(w * 0.09))
+    p0 = (int(w * 0.24), int(w * 0.52))
+    p1 = (int(w * 0.43), int(w * 0.69))
+    p2 = (int(w * 0.74), int(w * 0.31))
+    d.line([p0, p1], fill='white', width=lw)
+    d.line([p1, p2], fill='white', width=lw)
 
-    # 上下分割線（ボタン部 / グリップ部）
-    split_y = int(s * 0.40)
-    d.line([(ml + outline, split_y), (mr - outline, split_y)],
-           fill=dark, width=outline)
-
-    # 左右分割線（左ボタン / 右ボタン）
-    d.line([(cx, mt + outline), (cx, split_y)],
-           fill=dark, width=outline)
-
-    # スクロールホイール（赤）
-    ww = max(2, int(s * 0.06))
-    wh = max(4, int(s * 0.11))
-    wy = int(s * 0.20)
-    d.rounded_rectangle(
-        [cx - ww, wy, cx + ww, wy + wh * 2],
-        radius=max(1, int(s * 0.025)),
-        fill='#E94560',
-    )
-
-    # ケーブル（上部中央から出る）
-    cable_w = max(2, int(s * 0.05))
-    cable_top = max(0, mt - int(s * 0.10))
-    d.rectangle([cx - cable_w, cable_top, cx + cable_w, mt + outline],
-                fill=dark)
-
-    return img
+    return img.resize((size, size), Image.LANCZOS)
 
 
 def main() -> None:
     sizes = [16, 32, 48, 256]
-    base = _draw_mouse(256)
-    icons = [base.resize((s, s), Image.LANCZOS) for s in sizes]
-    icons[0].save(
+    imgs = [_draw_available(s) for s in sizes]
+    imgs[0].save(
         'icon.ico',
         format='ICO',
         sizes=[(s, s) for s in sizes],
-        append_images=icons[1:],
+        append_images=imgs[1:],
     )
-    base.save('icon.png')
+    _draw_available(256).save('icon.png')
     print('Generated icon.ico and icon.png')
 
 
