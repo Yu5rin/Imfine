@@ -10,7 +10,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.8.1'
+VERSION = '1.9.0'
 
 THEMES: dict = {
     'light': {
@@ -42,13 +42,14 @@ def _load_tray_image(running: bool):
     import PIL.BmpImagePlugin  # noqa: F401  pystray HICON 生成に必要
     img = Image.open(_res('icon.png')).convert('RGBA')
     img = img.resize((64, 64), Image.LANCZOS)
-    if running:
+    if not running:
         pixels = img.load()
         for y in range(img.height):
             for x in range(img.width):
                 r, g, b, a = pixels[x, y]
-                if a > 100 and r > 200 and g > 200 and b > 200:
-                    pixels[x, y] = (76, 175, 80, a)
+                if a > 100:
+                    gray = int(r * 0.299 + g * 0.587 + b * 0.114)
+                    pixels[x, y] = (gray, gray, gray, a)
     return img
 
 
@@ -187,7 +188,7 @@ class App(tk.Tk):
         dpi = self._get_system_dpi()
         self.tk.call('tk', 'scaling', dpi / 72.0)
         self._scale = dpi / 96.0
-        self.title(f'Mouser  v{VERSION}')
+        self.title(f"I'm fine  v{VERSION}")
         self.resizable(False, False)
         try:
             self.iconbitmap(_res('icon.ico'))
@@ -452,7 +453,7 @@ class App(tk.Tk):
 
     def _on_close(self) -> None:
         if hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING:
-            if not messagebox.askyesno('Mouser', '動作中です。終了しますか？'):
+            if not messagebox.askyesno("I'm fine", '動作中です。終了しますか？'):
                 return
         if self._tray_icon:
             self._tray_icon.stop()
@@ -491,7 +492,7 @@ class App(tk.Tk):
             pystray.MenuItem('終了', self._tray_quit),
         )
         try:
-            self._tray_icon = pystray.Icon('Mouser', img, 'Mouser', menu)
+            self._tray_icon = pystray.Icon("I'm fine", img, "I'm fine", menu)
             self._tray_icon.run_detached()
             self._tray_icon.visible = True
         except Exception:
