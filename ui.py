@@ -1,6 +1,7 @@
 import datetime
 import os
 import sys
+import threading
 import tkinter as tk
 from tkinter import messagebox
 
@@ -10,7 +11,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.9.0'
+VERSION = '1.9.1'
 
 THEMES: dict = {
     'light': {
@@ -473,6 +474,7 @@ class App(tk.Tk):
     def _minimize_to_tray(self) -> None:
         try:
             import pystray
+            import pystray._win32
         except ImportError:
             return
         if self._tray_icon is not None:
@@ -480,19 +482,59 @@ class App(tk.Tk):
             self.withdraw()
             self._going_to_tray = False
             return
+
+        _WM_LBUTTONUP     = 0x0202
+        _WM_LBUTTONDBLCLK = 0x0203
+
+        class _TrayIcon(pystray._win32.Icon):
+            def __init__(cls, *args, on_left_click=None, on_left_dblclick=None, **kwargs):
+                super().__init__(*args, **kwargs)
+                cls._left_click_cb    = on_left_click
+                cls._left_dblclick_cb = on_left_dblclick
+                cls._click_timer      = None
+
+            def _on_notify(cls, wparam, lparam):
+                if lparam == _WM_LBUTTONDBLCLK:
+                    if cls._click_timer is not None:
+                        cls._click_timer.cancel()
+                        cls._click_timer = None
+                    if cls._left_dblclick_cb:
+                        cls._left_dblclick_cb()
+                elif lparam == _WM_LBUTTONUP:
+                    if cls._left_click_cb:
+                        import ctypes
+                        delay = ctypes.windll.user32.GetDoubleClickTime() / 1000.0
+                        if cls._click_timer is not None:
+                            cls._click_timer.cancel()
+                        cls._click_timer = threading.Timer(delay, cls._fire_click)
+                        cls._click_timer.start()
+                    else:
+                        super()._on_notify(wparam, lparam)
+                else:
+                    super()._on_notify(wparam, lparam)
+
+            def _fire_click(cls):
+                cls._click_timer = None
+                if cls._left_click_cb:
+                    cls._left_click_cb()
+
         running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
         try:
             img = _load_tray_image(running)
         except Exception:
             img = Image.new('RGB', (64, 64),
-                            '#4CAF50' if running else '#4A90D9')
+                            '#4CAF50' if running else '#9E9E9E')
         menu = pystray.Menu(
             pystray.MenuItem('タスクトレイから出す',
                              self._tray_restore, default=True),
             pystray.MenuItem('終了', self._tray_quit),
         )
         try:
-            self._tray_icon = pystray.Icon("I'm fine", img, "I'm fine", menu)
+            self._tray_icon = _TrayIcon(
+                "I'm fine", img, "I'm fine", menu,
+                on_left_click=lambda: self.after(0, self._tray_toggle),
+                on_left_dblclick=lambda: self.after(0, self._tray_restore),
+            )
             self._tray_icon.run_detached()
             self._tray_icon.visible = True
         except Exception:
@@ -501,6 +543,12 @@ class App(tk.Tk):
         self._going_to_tray = True
         self.withdraw()
         self._going_to_tray = False
+
+    def _tray_toggle(self) -> None:
+        if hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING:
+            self._on_stop()
+        else:
+            self._on_start()
 
     def _tray_restore(self, icon=None, item=None) -> None:
         icon_ref = self._tray_icon
