@@ -68,7 +68,7 @@ jobs:
         run: python icon_gen.py
 
       - name: Build exe
-        run: pyinstaller Mouser.spec
+        run: pyinstaller ImFine.spec
 
       - name: Create release
         run: gh release create ${{ steps.ver.outputs.tag }} dist/ImFine.exe --title "I'm fine ${{ steps.ver.outputs.tag }}" --notes "I'm fine ${{ steps.ver.outputs.tag }}"

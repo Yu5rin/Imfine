@@ -11,7 +11,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.9.1'
+VERSION = '1.9.2'
 
 THEMES: dict = {
     'light': {
@@ -70,7 +70,7 @@ class _Toggle(tk.Canvas):
 
     def __init__(self, parent, command=None):
         super().__init__(parent, width=self.W, height=self.H,
-                         bd=0, highlightthickness=0)
+                         bd=0, highlightthickness=0, cursor='hand2')
         self._on = False
         self._pos = 0.0
         self._cmd = command
@@ -298,8 +298,10 @@ class App(tk.Tk):
         self._stop_min_sp.pack(side='left', padx=(2, 0))
         self._tw['spinboxes'].append(self._stop_min_sp)
 
-        self._stop_hour.trace_add('write', lambda *_: self._save_if_valid())
-        self._stop_min.trace_add('write', lambda *_: self._fmt_min_and_save())
+        self._stop_hour.trace_add(
+            'write', lambda *_: self._fmt_time_and_save(self._stop_hour, 23))
+        self._stop_min.trace_add(
+            'write', lambda *_: self._fmt_time_and_save(self._stop_min, 59))
         self._stop_timer_enabled.trace_add('write', lambda *_: self._save_if_valid())
 
     def _build_separator(self) -> None:
@@ -364,7 +366,7 @@ class App(tk.Tk):
     def _load_settings(self) -> None:
         c = self._cfg
         self._stop_timer_enabled.set(bool(c.get('stop_timer_enabled', False)))
-        self._stop_hour.set(str(c.get('stop_hour', 17)))
+        self._stop_hour.set(f"{c.get('stop_hour', 17):02d}")
         self._stop_min.set(f"{c.get('stop_min', 0):02d}")
         self._tray_minimize.set(bool(c.get('tray_minimize', True)))
 
@@ -386,19 +388,26 @@ class App(tk.Tk):
         cfg = self._get_cfg()
         if cfg:
             settings.save(cfg)
+        self._refresh_stop_target()
 
-    def _fmt_min_and_save(self) -> None:
+    def _fmt_time_and_save(self, var: tk.StringVar, maxval: int) -> None:
         if self._loading:
             return
         try:
-            v = int(self._stop_min.get())
+            v = max(0, min(maxval, int(var.get())))
             fmt = f'{v:02d}'
-            if self._stop_min.get() != fmt:
-                self._stop_min.set(fmt)
-                return
+            if var.get() != fmt:
+                var.set(fmt)
+                return  # set で trace が再発火し、そちらで保存される
         except ValueError:
             pass
         self._save_if_valid()
+
+    def _refresh_stop_target(self) -> None:
+        if (hasattr(self, '_ctrl')
+                and self._ctrl.state == Controller.RUNNING
+                and not self._stop_triggered):
+            self._stop_target = self._calc_stop_target()
 
     def _calc_stop_target(self) -> 'datetime.datetime | None':
         try:
@@ -421,6 +430,9 @@ class App(tk.Tk):
     def _on_start(self) -> None:
         self._stop_triggered = False
         self._stop_target = self._calc_stop_target()
+        if self._stop_timer_enabled.get() and self._stop_target is None:
+            messagebox.showwarning(
+                "I'm fine", '停止時刻が不正なため停止タイマーは動作しません。')
         self._ctrl.start()
         self._toggle_sw.set_state(True)
         self._update_tray_icon()
@@ -456,9 +468,9 @@ class App(tk.Tk):
         if hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING:
             if not messagebox.askyesno("I'm fine", '動作中です。終了しますか？'):
                 return
-        if self._tray_icon:
-            self._tray_icon.stop()
-            self._tray_icon = None
+        icon_ref = self._tray_icon
+        self._tray_icon = None
+        self._stop_tray_icon(icon_ref)
         if hasattr(self, '_ctrl'):
             self._ctrl.stop()
         self.destroy()
@@ -487,36 +499,46 @@ class App(tk.Tk):
         _WM_LBUTTONDBLCLK = 0x0203
 
         class _TrayIcon(pystray._win32.Icon):
-            def __init__(cls, *args, on_left_click=None, on_left_dblclick=None, **kwargs):
+            def __init__(self, *args, on_left_click=None, on_left_dblclick=None, **kwargs):
                 super().__init__(*args, **kwargs)
-                cls._left_click_cb    = on_left_click
-                cls._left_dblclick_cb = on_left_dblclick
-                cls._click_timer      = None
+                self._left_click_cb    = on_left_click
+                self._left_dblclick_cb = on_left_dblclick
+                self._click_timer      = None
+                self._ignore_next_up   = False
 
-            def _on_notify(cls, wparam, lparam):
+            def cancel_click_timer(self):
+                if self._click_timer is not None:
+                    self._click_timer.cancel()
+                    self._click_timer = None
+
+            def _on_notify(self, wparam, lparam):
                 if lparam == _WM_LBUTTONDBLCLK:
-                    if cls._click_timer is not None:
-                        cls._click_timer.cancel()
-                        cls._click_timer = None
-                    if cls._left_dblclick_cb:
-                        cls._left_dblclick_cb()
+                    self.cancel_click_timer()
+                    self._ignore_next_up = True
+                    if self._left_dblclick_cb:
+                        self._left_dblclick_cb()
                 elif lparam == _WM_LBUTTONUP:
-                    if cls._left_click_cb:
+                    if self._ignore_next_up:
+                        self._ignore_next_up = False
+                        return
+                    if self._left_click_cb:
                         import ctypes
                         delay = ctypes.windll.user32.GetDoubleClickTime() / 1000.0
-                        if cls._click_timer is not None:
-                            cls._click_timer.cancel()
-                        cls._click_timer = threading.Timer(delay, cls._fire_click)
-                        cls._click_timer.start()
+                        self.cancel_click_timer()
+                        self._click_timer = threading.Timer(delay, self._fire_click)
+                        self._click_timer.start()
                     else:
                         super()._on_notify(wparam, lparam)
                 else:
                     super()._on_notify(wparam, lparam)
 
-            def _fire_click(cls):
-                cls._click_timer = None
-                if cls._left_click_cb:
-                    cls._left_click_cb()
+            def _fire_click(self):
+                self._click_timer = None
+                if self._left_click_cb:
+                    try:
+                        self._left_click_cb()
+                    except Exception:
+                        pass
 
         running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
         try:
@@ -547,21 +569,40 @@ class App(tk.Tk):
     def _tray_toggle(self) -> None:
         if hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING:
             self._on_stop()
+            msg = '停止しました'
         else:
             self._on_start()
+            msg = '動作中'
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.notify(msg)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _stop_tray_icon(icon_ref) -> None:
+        if icon_ref is None:
+            return
+        if hasattr(icon_ref, 'cancel_click_timer'):
+            icon_ref.cancel_click_timer()
+        icon_ref.stop()
 
     def _tray_restore(self, icon=None, item=None) -> None:
         icon_ref = self._tray_icon
         self._tray_icon = None
-        if icon_ref:
-            icon_ref.stop()
+        self._stop_tray_icon(icon_ref)
         self.after(0, self.deiconify)
 
     def _tray_quit(self, icon=None, item=None) -> None:
+        self.after(0, self._confirm_tray_quit)
+
+    def _confirm_tray_quit(self) -> None:
+        if hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING:
+            if not messagebox.askyesno("I'm fine", '動作中です。終了しますか？'):
+                return
         icon_ref = self._tray_icon
         self._tray_icon = None
-        if icon_ref:
-            icon_ref.stop()
+        self._stop_tray_icon(icon_ref)
         if hasattr(self, '_ctrl'):
             self._ctrl.stop()
-        self.after(0, self.destroy)
+        self.destroy()
