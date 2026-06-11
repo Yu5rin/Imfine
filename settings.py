@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import shutil
 
 DEFAULTS: dict = {
     'theme': 'light',
@@ -16,9 +17,17 @@ def _get_path() -> pathlib.Path:
         base = pathlib.Path(os.environ.get('APPDATA', pathlib.Path.home() / 'AppData' / 'Roaming'))
     else:
         base = pathlib.Path.home() / '.config'
-    d = base / 'Mouser'
+    d = base / 'ImFine'
+    path = d / 'settings.json'
     d.mkdir(parents=True, exist_ok=True)
-    return d / 'settings.json'
+    if not path.exists():
+        old = base / 'Mouser' / 'settings.json'
+        if old.exists():
+            try:
+                shutil.copy2(old, path)
+            except OSError:
+                pass
+    return path
 
 
 def load() -> dict:

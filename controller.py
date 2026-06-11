@@ -44,8 +44,10 @@ class Controller:
             return
         self.state = self.RUNNING
         _set_execution_state(True)
-        self._stop_ev.clear()
-        threading.Thread(target=self._loop, daemon=True).start()
+        # stop 直後に start しても旧ループが生き残らないよう毎回新しい Event を使う
+        self._stop_ev = threading.Event()
+        threading.Thread(target=self._loop, args=(self._stop_ev,),
+                         daemon=True).start()
         self._notify('動作中')
 
     def stop(self) -> None:
@@ -54,9 +56,9 @@ class Controller:
         self.state = self.STOPPED
         self._notify('停止しました')
 
-    def _loop(self) -> None:
-        while not self._stop_ev.wait(30):
-            if self.state == self.RUNNING:
+    def _loop(self, stop_ev: threading.Event) -> None:
+        while not stop_ev.wait(30):
+            if self.state == self.RUNNING and stop_ev is self._stop_ev:
                 _send_heartbeat()
 
     def _notify(self, msg: str) -> None:
