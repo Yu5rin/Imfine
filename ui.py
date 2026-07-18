@@ -11,7 +11,7 @@ import settings
 from controller import Controller
 
 
-VERSION = '1.9.2'
+VERSION = '1.10.0'
 
 THEMES: dict = {
     'light': {
@@ -206,6 +206,7 @@ class App(tk.Tk):
         self._going_to_tray = False
         self._stop_triggered = False
         self._stop_target: datetime.datetime | None = None
+        self._start_time: datetime.datetime | None = None
         self._tray_minimize: tk.BooleanVar
 
         self._tw: dict[str, list] = {
@@ -227,12 +228,16 @@ class App(tk.Tk):
 
         self.update_idletasks()
         self.geometry(f'{int(260 * self._scale)}x{self.winfo_reqheight()}')
+        self._restore_position()
 
         self._ctrl = Controller({})
 
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         self.bind('<Unmap>', self._on_unmap)
         self.after(1000, self._check_stop_timer)
+
+        if self._cfg.get('auto_on'):
+            self.after(300, self._on_start)
 
     # ── layout ────────────────────────────────────────────────────────────
 
@@ -242,7 +247,7 @@ class App(tk.Tk):
         self._build_separator()
         self._build_controls()
         self._build_separator()
-        self._build_tray_setting()
+        self._build_options()
 
     def _build_header(self) -> None:
         f = tk.Frame(self)
@@ -311,25 +316,34 @@ class App(tk.Tk):
 
     def _build_controls(self) -> None:
         f = tk.Frame(self)
-        f.pack(pady=(4, 4))
+        f.pack(pady=(4, 0))
         self._tw['bg_frames'].append(f)
         self._toggle_sw = _Toggle(f, command=self._on_toggle)
         self._toggle_sw.pack()
+        self._status_lbl = tk.Label(f, text='停止中', font=('Helvetica', 9))
+        self._status_lbl.pack(pady=(4, 2))
+        self._tw['muted'].append(self._status_lbl)
 
-    def _build_tray_setting(self) -> None:
+    def _build_options(self) -> None:
         f = tk.Frame(self)
         f.pack(fill='x', padx=12, pady=(2, 8))
         self._tw['bg_frames'].append(f)
 
         self._tray_minimize = tk.BooleanVar(value=True)
-        tray_cb = tk.Checkbutton(
-            f, variable=self._tray_minimize,
-            text='最小化でタスクトレイ格納',
-            font=('Helvetica', 8),
-            command=self._save_if_valid,
-        )
-        tray_cb.pack(anchor='w')
-        self._tw['checks'].append(tray_cb)
+        self._auto_on = tk.BooleanVar(value=False)
+        self._startup = tk.BooleanVar(value=False)
+
+        for var, text, cmd in (
+            (self._tray_minimize, '最小化でタスクトレイ格納', self._save_if_valid),
+            (self._auto_on, '起動時に自動でON', self._save_if_valid),
+            (self._startup, 'Windows起動時に起動', self._on_startup_toggle),
+        ):
+            cb = tk.Checkbutton(
+                f, variable=var, text=text,
+                font=('Helvetica', 8), command=cmd,
+            )
+            cb.pack(anchor='w')
+            self._tw['checks'].append(cb)
 
     # ── theme ─────────────────────────────────────────────────────────────
 
@@ -369,6 +383,8 @@ class App(tk.Tk):
         self._stop_hour.set(f"{c.get('stop_hour', 17):02d}")
         self._stop_min.set(f"{c.get('stop_min', 0):02d}")
         self._tray_minimize.set(bool(c.get('tray_minimize', True)))
+        self._auto_on.set(bool(c.get('auto_on', False)))
+        self._startup.set(self._startup_registered())
 
     def _get_cfg(self) -> dict | None:
         try:
@@ -378,6 +394,9 @@ class App(tk.Tk):
                 'stop_hour': int(self._stop_hour.get()),
                 'stop_min':  int(self._stop_min.get()),
                 'tray_minimize': self._tray_minimize.get(),
+                'auto_on': self._auto_on.get(),
+                'win_x': self._cfg.get('win_x'),
+                'win_y': self._cfg.get('win_y'),
             }
         except (ValueError, AttributeError):
             return None
@@ -402,6 +421,66 @@ class App(tk.Tk):
         except ValueError:
             pass
         self._save_if_valid()
+
+    # ── startup / position ────────────────────────────────────────────────
+
+    _RUN_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
+    _RUN_NAME = 'ImFine'
+
+    @classmethod
+    def _startup_registered(cls) -> bool:
+        if sys.platform != 'win32':
+            return False
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, cls._RUN_KEY) as key:
+                winreg.QueryValueEx(key, cls._RUN_NAME)
+                return True
+        except OSError:
+            return False
+
+    def _on_startup_toggle(self) -> None:
+        if sys.platform != 'win32':
+            return
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self._RUN_KEY,
+                                0, winreg.KEY_SET_VALUE) as key:
+                if self._startup.get():
+                    if getattr(sys, 'frozen', False):
+                        cmd = f'"{sys.executable}"'
+                    else:
+                        cmd = (f'"{sys.executable}"'
+                               f' "{os.path.abspath(sys.argv[0])}"')
+                    winreg.SetValueEx(key, self._RUN_NAME, 0,
+                                      winreg.REG_SZ, cmd)
+                else:
+                    try:
+                        winreg.DeleteValue(key, self._RUN_NAME)
+                    except FileNotFoundError:
+                        pass
+        except OSError:
+            messagebox.showwarning(
+                "I'm fine", 'スタートアップ登録の変更に失敗しました。')
+            self._startup.set(self._startup_registered())
+        self._save_if_valid()
+
+    def _restore_position(self) -> None:
+        x, y = self._cfg.get('win_x'), self._cfg.get('win_y')
+        if isinstance(x, int) and isinstance(y, int):
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            if -50 < x < sw - 100 and 0 <= y < sh - 100:
+                self.geometry(f'+{x}+{y}')
+
+    def _save_position(self) -> None:
+        try:
+            self._cfg['win_x'] = self.winfo_x()
+            self._cfg['win_y'] = self.winfo_y()
+        except Exception:
+            return
+        cfg = self._get_cfg()
+        if cfg:
+            settings.save(cfg)
 
     def _refresh_stop_target(self) -> None:
         if (hasattr(self, '_ctrl')
@@ -433,14 +512,36 @@ class App(tk.Tk):
         if self._stop_timer_enabled.get() and self._stop_target is None:
             messagebox.showwarning(
                 "I'm fine", '停止時刻が不正なため停止タイマーは動作しません。')
+        self._start_time = datetime.datetime.now()
         self._ctrl.start()
         self._toggle_sw.set_state(True)
         self._update_tray_icon()
+        self._update_status()
 
     def _on_stop(self) -> None:
+        self._start_time = None
         self._ctrl.stop()
         self._toggle_sw.set_state(False)
         self._update_tray_icon()
+        self._update_status()
+
+    def _update_status(self) -> None:
+        if not hasattr(self, '_status_lbl'):
+            return
+        if not (hasattr(self, '_ctrl')
+                and self._ctrl.state == Controller.RUNNING):
+            self._status_lbl.config(text='停止中')
+            return
+        parts = ['動作中']
+        if self._start_time is not None:
+            sec = int((datetime.datetime.now()
+                       - self._start_time).total_seconds())
+            h, rem = divmod(sec, 3600)
+            m, s = divmod(rem, 60)
+            parts.append(f'{h:d}:{m:02d}:{s:02d}')
+        if self._stop_timer_enabled.get() and self._stop_target is not None:
+            parts.append(f'({self._stop_target:%H:%M} に自動停止)')
+        self._status_lbl.config(text=' '.join(parts))
 
     def _check_stop_timer(self) -> None:
         if (self._stop_timer_enabled.get()
@@ -451,6 +552,12 @@ class App(tk.Tk):
             if datetime.datetime.now() >= self._stop_target:
                 self._stop_triggered = True
                 self._on_stop()
+                if self._tray_icon is not None:
+                    try:
+                        self._tray_icon.notify('停止時刻になったため停止しました')
+                    except Exception:
+                        pass
+        self._update_status()
         self.after(1000, self._check_stop_timer)
 
     def _update_tray_icon(self) -> None:
@@ -468,6 +575,7 @@ class App(tk.Tk):
         if hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING:
             if not messagebox.askyesno("I'm fine", '動作中です。終了しますか？'):
                 return
+        self._save_position()
         icon_ref = self._tray_icon
         self._tray_icon = None
         self._stop_tray_icon(icon_ref)
@@ -489,6 +597,7 @@ class App(tk.Tk):
             import pystray._win32
         except ImportError:
             return
+        self._save_position()
         if self._tray_icon is not None:
             self._going_to_tray = True
             self.withdraw()

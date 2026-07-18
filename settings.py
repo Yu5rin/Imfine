@@ -9,6 +9,9 @@ DEFAULTS: dict = {
     'stop_hour': 17,
     'stop_min': 0,
     'tray_minimize': True,
+    'auto_on': False,
+    'win_x': None,
+    'win_y': None,
 }
 
 
