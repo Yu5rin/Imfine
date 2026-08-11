@@ -9,9 +9,10 @@ from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 import settings
 from controller import Controller
+from titlebar import TitleBarThemeHelper
 
 
-VERSION = '1.10.0'
+VERSION = '1.10.1'
 
 THEMES: dict = {
     'light': {
@@ -21,6 +22,9 @@ THEMES: dict = {
         'ENTRY_BG': '#FFFFFF',
         'BTN_BG':   '#E8E8E8',
         'BORDER':   '#CCCCCC',
+        # タイトルバー (アクセントカラー導入時はここだけ差し替えればよい)
+        'CAPTION':      '#F5F5F5',
+        'CAPTION_TEXT': '#222222',
     },
     'dark': {
         'BG':       '#1E1E1E',
@@ -29,6 +33,8 @@ THEMES: dict = {
         'ENTRY_BG': '#2D2D2D',
         'BTN_BG':   '#3C3C3C',
         'BORDER':   '#444444',
+        'CAPTION':      '#1E1E1E',
+        'CAPTION_TEXT': '#D4D4D4',
     },
 }
 
@@ -368,6 +374,20 @@ class App(tk.Tk):
         if hasattr(self, '_toggle_sw'):
             self._toggle_sw.configure_bg(t['BG'])
 
+        self._apply_titlebar_theme()
+
+    def _apply_titlebar_theme(self) -> None:
+        if sys.platform != 'win32':
+            return
+        t = THEMES['dark' if self._dark else 'light']
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+        except Exception:
+            return
+        TitleBarThemeHelper.apply(
+            hwnd, self._dark, t['CAPTION'], t['CAPTION_TEXT'])
+
     def _toggle_theme(self) -> None:
         self._dark = not self._dark
         self._apply_theme()
@@ -701,6 +721,7 @@ class App(tk.Tk):
         self._tray_icon = None
         self._stop_tray_icon(icon_ref)
         self.after(0, self.deiconify)
+        self.after(0, self._apply_titlebar_theme)
 
     def _tray_quit(self, icon=None, item=None) -> None:
         self.after(0, self._confirm_tray_quit)
