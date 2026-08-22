@@ -137,6 +137,7 @@ def apply_update(new_exe_path: str) -> bool:
             os.rename(old_path, current_exe)  # ロールバック
         except OSError:
             pass
+        _safe_remove(new_exe_path)  # move が部分的に失敗しても残骸を残さない
         return False
 
     try:
@@ -149,10 +150,12 @@ def apply_update(new_exe_path: str) -> bool:
         )
     except OSError:
         try:
-            os.rename(current_exe, new_exe_path)
-            os.rename(old_path, current_exe)
+            os.rename(current_exe, new_exe_path)  # 新しい exe をいったん退避
+            os.rename(old_path, current_exe)      # ロールバック
         except OSError:
             pass
+        else:
+            _safe_remove(new_exe_path)  # 退避させた新しい exe の残骸を削除
         return False
 
     return True
