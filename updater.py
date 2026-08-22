@@ -12,7 +12,6 @@ import urllib.request
 
 REQUEST_TIMEOUT = 10
 DOWNLOAD_TIMEOUT = 60
-CHECK_INTERVAL_SEC = 24 * 60 * 60  # 起動時に1日1回まで
 
 
 def _parse_version(v: str) -> tuple:
@@ -166,23 +165,16 @@ def cleanup_old() -> None:
     _safe_remove(sys.executable + '.old')
 
 
-def _should_check(cfg: dict) -> bool:
-    last = cfg.get('last_update_check') or 0
-    try:
-        return (time.time() - float(last)) >= CHECK_INTERVAL_SEC
-    except (TypeError, ValueError):
-        return True
-
-
 def check_and_apply_async(current_version: str, url: str, cfg: dict,
                           save_cfg, on_ready_to_restart) -> None:
     """バックグラウンドで更新確認〜適用まで行う。UI をブロックしない。
+    起動するたびに毎回チェックする。
 
     on_ready_to_restart は、置き換えが完了し自プロセスを終了してよく
     なった時にバックグラウンドスレッドから呼ばれる (呼び出し側で
     メインスレッドへ安全に伝播すること)。
     """
-    if not url or not _should_check(cfg):
+    if not url:
         return
 
     def _worker():
