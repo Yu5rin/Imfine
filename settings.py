@@ -12,6 +12,8 @@ DEFAULTS: dict = {
     'auto_on': False,
     'win_x': None,
     'win_y': None,
+    'update_check_url': 'https://api.github.com/repos/Yu5rin/Imfine/releases/latest',
+    'last_update_check': 0,
 }
 
 

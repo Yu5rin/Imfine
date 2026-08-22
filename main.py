@@ -30,11 +30,13 @@ def _check_single_instance() -> None:
 
 
 from ui import App
+import updater
 
 
 def main() -> None:
     _set_dpi_aware()
     _check_single_instance()
+    updater.cleanup_old()
     app = App()
     app.mainloop()
 

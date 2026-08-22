@@ -7,7 +7,7 @@ a = Analysis(
     binaries=[],
     datas=[('icon.ico', '.'), ('icon.png', '.')],
     hiddenimports=[
-        'controller', 'settings', 'titlebar',
+        'controller', 'settings', 'titlebar', 'updater',
         'PIL.BmpImagePlugin', 'PIL.PngImagePlugin',
         'PIL.ImageTk', 'PIL.ImageDraw', 'PIL.ImageFont',
         'pystray', 'pystray._win32', 'pystray._base',

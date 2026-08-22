@@ -8,11 +8,12 @@ from tkinter import messagebox
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 import settings
+import updater
 from controller import Controller
 from titlebar import TitleBarThemeHelper
 
 
-VERSION = '1.10.1'
+VERSION = '1.11.0'
 
 THEMES: dict = {
     'light': {
@@ -213,6 +214,7 @@ class App(tk.Tk):
         self._stop_triggered = False
         self._stop_target: datetime.datetime | None = None
         self._start_time: datetime.datetime | None = None
+        self._update_pending = False
         self._tray_minimize: tk.BooleanVar
 
         self._tw: dict[str, list] = {
@@ -244,6 +246,8 @@ class App(tk.Tk):
 
         if self._cfg.get('auto_on'):
             self.after(300, self._on_start)
+
+        self.after(3000, self._check_for_updates)
 
     # ── layout ────────────────────────────────────────────────────────────
 
@@ -564,6 +568,9 @@ class App(tk.Tk):
         self._status_lbl.config(text=' '.join(parts))
 
     def _check_stop_timer(self) -> None:
+        if self._update_pending:
+            self._perform_update_shutdown()
+            return
         if (self._stop_timer_enabled.get()
                 and not self._stop_triggered
                 and hasattr(self, '_ctrl')
@@ -579,6 +586,28 @@ class App(tk.Tk):
                         pass
         self._update_status()
         self.after(1000, self._check_stop_timer)
+
+    # ── auto update ───────────────────────────────────────────────────────
+
+    def _check_for_updates(self) -> None:
+        if not getattr(sys, 'frozen', False):
+            return  # ソースから実行時は自己置き換えできないので対象外
+        updater.check_and_apply_async(
+            VERSION, self._cfg.get('update_check_url'), self._cfg,
+            settings.save, self._on_update_ready)
+
+    def _on_update_ready(self) -> None:
+        # updater のバックグラウンドスレッドから呼ばれるため、
+        # Tk の操作は必ず _check_stop_timer (メインスレッド) 側で行う。
+        self._update_pending = True
+
+    def _perform_update_shutdown(self) -> None:
+        icon_ref = self._tray_icon
+        self._tray_icon = None
+        self._stop_tray_icon(icon_ref)
+        if hasattr(self, '_ctrl'):
+            self._ctrl.stop()
+        self.destroy()
 
     def _update_tray_icon(self) -> None:
         if self._tray_icon is None:
