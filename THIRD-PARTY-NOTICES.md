@@ -37,3 +37,18 @@ LGPL 準拠についてより厳密な対応が必要な場合は、専門家へ
 PyInstaller のブートローダーには、生成される実行ファイル (本アプリの
 配布物) を GPL の対象外とする例外条項があります。詳細は PyInstaller の
 `COPYING.txt` を参照してください。
+
+## Python
+
+- ライセンス: PSF License Agreement
+- ソース: https://docs.python.org/3/license.html
+
+配布される exe には CPython のランタイムが同梱されます。
+
+## Tcl/Tk
+
+- ライセンス: BSDスタイルのライセンス (tkinter が依存)
+- ソース: https://www.tcl.tk/software/tcltk/license.html
+
+GUI に tkinter を使用しているため、その基盤である Tcl/Tk のバイナリが
+exe に同梱されます。
