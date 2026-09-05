@@ -67,6 +67,12 @@ pyinstaller ImFine.spec
 GitHub Actions の Build and Release ワークフローを手動実行すると、
 ui.py のバージョンを読み取って自動でタグ付け・リリースされます。
 
+### リリース手順
+
+1. リリース前に `CHANGELOG.md` へ `## v<バージョン>` の節を追記する（見出しはリリースタグ名と完全一致させること）
+2. ワークフローを実行する（該当節が無いとビルド前にワークフローが失敗する）
+3. ワークフローが `CHANGELOG.md` の該当節を自動的に抜き出し、GitHub リリースのリリースノートとして反映する
+
 ## 設定ファイル
 
 %APPDATA%\ImFine\settings.json に保存されます。

@@ -39,6 +39,33 @@ jobs:
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check CHANGELOG entry
+        id: changelog
+        shell: bash
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          NOTES_PATH="$RUNNER_TEMP/release_notes.md"
+
+          awk -v ver="## $TAG" '
+            { sub(/\r$/, "") }
+            $0 == ver { p = 1; next }
+            p && /^## / { p = 0 }
+            p { buf[++n] = $0 }
+            END {
+              s = 1; e = n
+              while (s <= e && buf[s] == "") s++
+              while (e >= s && buf[e] == "") e--
+              for (i = s; i <= e; i++) print buf[i]
+            }
+          ' CHANGELOG.md > "$NOTES_PATH"
+
+          if [ ! -s "$NOTES_PATH" ]; then
+            echo "::error::CHANGELOG.md に「## $TAG」の節が見つかりません。リリース前に CHANGELOG.md へ該当バージョンの節を追記してから再実行してください。"
+            exit 1
+          fi
+
+          echo "notes_path=$NOTES_PATH" >> $GITHUB_OUTPUT
+
       - name: Delete existing release and tag if present (manual trigger only)
         if: github.event_name == 'workflow_dispatch'
         shell: bash
@@ -71,6 +98,7 @@ jobs:
         run: pyinstaller ImFine.spec
 
       - name: Create release
-        run: gh release create ${{ steps.ver.outputs.tag }} dist/ImFine.exe --title "I'm fine ${{ steps.ver.outputs.tag }}" --notes "I'm fine ${{ steps.ver.outputs.tag }}"
+        shell: bash
+        run: gh release create ${{ steps.ver.outputs.tag }} dist/ImFine.exe --title "I'm fine ${{ steps.ver.outputs.tag }}" --notes-file "${{ steps.changelog.outputs.notes_path }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
