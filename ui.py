@@ -13,7 +13,7 @@ from controller import Controller
 from titlebar import TitleBarThemeHelper
 
 
-VERSION = '1.12.0'
+VERSION = '1.13.0'
 
 # フォントサイズ (役割ごとに統一する。8pt は小さすぎるため使わない)
 FONT_SM = 9   # 補助的なラベル・ボタン
@@ -245,6 +245,18 @@ class App(tk.Tk):
             'borders':   [],
             'btns':      [],
             'checks':    [],
+            'radios':    [],
+        }
+        self._settings_win: tk.Toplevel | None = None
+        self._settings_tw: dict[str, list] = {
+            'bg_frames': [],
+            'labels':    [],
+            'muted':     [],
+            'spinboxes': [],
+            'borders':   [],
+            'btns':      [],
+            'checks':    [],
+            'radios':    [],
         }
 
         self._build()
@@ -277,12 +289,11 @@ class App(tk.Tk):
     # ── layout ────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
+        self._init_option_vars()
         self._build_header()
         self._build_stop_timer()
         self._build_separator()
         self._build_controls()
-        self._build_separator()
-        self._build_options()
 
     def _build_header(self) -> None:
         f = tk.Frame(self)
@@ -293,15 +304,15 @@ class App(tk.Tk):
         lbl.pack(side='left')
         self._tw['muted'].append(lbl)
 
-        self._toggle_btn = tk.Button(
-            f, text='ダーク',
+        self._settings_btn = tk.Button(
+            f, text='設定',
             font=('Helvetica', FONT_SM),
             relief='solid', bd=1, padx=8, pady=2,
-            cursor='hand2', command=self._toggle_theme,
+            cursor='hand2', command=self._open_settings,
             highlightthickness=0,
         )
-        self._toggle_btn.pack(side='right')
-        self._tw['btns'].append(self._toggle_btn)
+        self._settings_btn.pack(side='right')
+        self._tw['btns'].append(self._settings_btn)
 
     def _build_stop_timer(self) -> None:
         outer = tk.Frame(self)
@@ -369,44 +380,168 @@ class App(tk.Tk):
             wraplength=int(230 * self._scale), justify='center',
             height=2,
         )
-        self._status_lbl.pack(pady=(4, 2))
+        self._status_lbl.pack(pady=(4, 8))
         self._tw['labels'].append(self._status_lbl)
 
-    def _build_options(self) -> None:
-        f = tk.Frame(self)
-        f.pack(fill='x', padx=12, pady=(2, 8))
-        self._tw['bg_frames'].append(f)
+    def _init_option_vars(self) -> None:
+        """設定ウィンドウで使う BooleanVar 類をメイン画面の構築時に用意する。
 
+        変数自体はウィンドウの開閉と無関係に生き続ける必要があるため、
+        設定ウィンドウを開くたびに作り直すのではなくここで一度だけ作る。
+        """
         self._tray_minimize = tk.BooleanVar(value=True)
         self._auto_on = tk.BooleanVar(value=False)
         self._startup = tk.BooleanVar(value=False)
         self._start_in_tray = tk.BooleanVar(value=False)
         self._auto_update_enabled = tk.BooleanVar(value=True)
 
-        for var, text, cmd in (
-            (self._tray_minimize, '最小化でタスクトレイ格納', self._save_if_valid),
-            (self._auto_on, '起動時に自動でON', self._save_if_valid),
-            (self._startup, 'Windows起動時に起動', self._on_startup_toggle),
-            (self._start_in_tray, '起動時にタスクトレイへ格納', self._save_if_valid),
-            (self._auto_update_enabled, '自動アップデート', self._save_if_valid),
-        ):
+    # ── settings window ──────────────────────────────────────────────────
+
+    def _open_settings(self) -> None:
+        if self._settings_win is not None and self._settings_win.winfo_exists():
+            self._settings_win.lift()
+            self._settings_win.focus_force()
+            return
+
+        win = tk.Toplevel(self)
+        self._settings_win = win
+        win.title('設定')
+        win.resizable(False, False)
+        win.transient(self)
+        try:
+            win.iconbitmap(_res('icon.ico'))
+        except Exception:
+            pass
+
+        self._settings_tw = {
+            'bg_frames': [], 'labels': [], 'muted': [], 'spinboxes': [],
+            'borders': [], 'btns': [], 'checks': [], 'radios': [],
+        }
+        self._theme_var = tk.StringVar(value='dark' if self._dark else 'light')
+
+        self._build_settings_content(win)
+
+        win.update_idletasks()
+        x = self.winfo_x() + self.winfo_width() + 10
+        y = self.winfo_y()
+        win.geometry(f'+{x}+{y}')
+
+        win.protocol('WM_DELETE_WINDOW', self._close_settings_window)
+        self._apply_theme()
+        win.lift()
+        win.focus_force()
+
+    def _build_settings_content(self, win: tk.Toplevel) -> None:
+        tw = self._settings_tw
+
+        def heading(parent: tk.Widget, text: str) -> None:
+            lbl = tk.Label(parent, text=text, font=('Helvetica', FONT_SM))
+            lbl.pack(anchor='w', pady=(0, 2))
+            tw['muted'].append(lbl)
+
+        def separator(parent: tk.Widget) -> None:
+            sep = tk.Frame(parent, height=1)
+            sep.pack(fill='x', pady=(8, 8))
+            tw['borders'].append(sep)
+
+        def checkbox(parent: tk.Widget, var: tk.BooleanVar, text: str, cmd) -> None:
             cb = tk.Checkbutton(
-                f, variable=var, text=text,
+                parent, variable=var, text=text,
                 font=('Helvetica', FONT_MD), command=cmd,
                 highlightthickness=0,
             )
             cb.pack(anchor='w')
-            self._tw['checks'].append(cb)
+            tw['checks'].append(cb)
+
+        outer = tk.Frame(win)
+        outer.pack(fill='both', expand=True, padx=14, pady=12)
+        tw['bg_frames'].append(outer)
+
+        # テーマ
+        heading(outer, 'テーマ')
+        theme_row = tk.Frame(outer)
+        theme_row.pack(fill='x')
+        tw['bg_frames'].append(theme_row)
+        for value, text in (('light', 'ライト'), ('dark', 'ダーク')):
+            rb = tk.Radiobutton(
+                theme_row, variable=self._theme_var, value=value, text=text,
+                font=('Helvetica', FONT_MD),
+                command=lambda: self._apply_theme_choice(self._theme_var.get()),
+                highlightthickness=0,
+            )
+            rb.pack(side='left', padx=(0, 12))
+            tw['radios'].append(rb)
+
+        separator(outer)
+
+        # 起動と常駐
+        heading(outer, '起動と常駐')
+        for var, text, cmd in (
+            (self._tray_minimize, '最小化でタスクトレイ格納', self._save_if_valid),
+            (self._start_in_tray, '起動時にタスクトレイへ格納', self._save_if_valid),
+            (self._auto_on, '起動時に自動でON', self._save_if_valid),
+            (self._startup, 'Windows起動時に起動', self._on_startup_toggle),
+        ):
+            checkbox(outer, var, text, cmd)
+
+        separator(outer)
+
+        # 更新
+        heading(outer, '更新')
+        checkbox(outer, self._auto_update_enabled, '自動アップデート', self._save_if_valid)
+        update_btn = tk.Button(
+            outer, text='今すぐ更新を確認',
+            font=('Helvetica', FONT_SM),
+            relief='solid', bd=1, padx=8, pady=2,
+            cursor='hand2', command=lambda: self._check_for_updates(force=True),
+            highlightthickness=0,
+        )
+        update_btn.pack(anchor='w', pady=(4, 0))
+        tw['btns'].append(update_btn)
+
+        separator(outer)
+
+        version_lbl = tk.Label(
+            outer, text=f'v{VERSION}', font=('Helvetica', FONT_SM))
+        version_lbl.pack(anchor='e')
+        tw['muted'].append(version_lbl)
+
+    def _close_settings_window(self) -> None:
+        win = self._settings_win
+        if win is None:
+            return
+        self._settings_win = None
+        if win.winfo_exists():
+            win.destroy()
 
     # ── theme ─────────────────────────────────────────────────────────────
 
     def _apply_theme(self) -> None:
         t = THEMES['dark' if self._dark else 'light']
         self.configure(bg=t['BG'])
-        for w in self._tw['bg_frames']: w.configure(bg=t['BG'])
-        for w in self._tw['labels']:    w.configure(bg=t['BG'], fg=t['TEXT'])
-        for w in self._tw['muted']:     w.configure(bg=t['BG'], fg=t['MUTED'])
-        for w in self._tw['spinboxes']:
+        self._apply_theme_group(self._tw, t)
+        if hasattr(self, '_toggle_sw'):
+            self._toggle_sw.configure_bg(t['BG'])
+        self._apply_titlebar_theme()
+
+        if self._settings_win is not None and self._settings_win.winfo_exists():
+            self._settings_win.configure(bg=t['BG'])
+            self._apply_theme_group(self._settings_tw, t)
+            self._apply_settings_titlebar_theme()
+
+    @staticmethod
+    def _apply_theme_group(tw: dict, t: dict) -> None:
+        # 設定ウィンドウが閉じられた直後など、破棄済みウィジェットへの
+        # configure() で例外にならないよう、必ず winfo_exists() で確認する。
+        for w in tw['bg_frames']:
+            if w.winfo_exists(): w.configure(bg=t['BG'])
+        for w in tw['labels']:
+            if w.winfo_exists(): w.configure(bg=t['BG'], fg=t['TEXT'])
+        for w in tw['muted']:
+            if w.winfo_exists(): w.configure(bg=t['BG'], fg=t['MUTED'])
+        for w in tw['spinboxes']:
+            if not w.winfo_exists():
+                continue
             # 入力が無効と判定されている間は警告色を維持し、テーマ切替で
             # 元に戻ってしまわないようにする。
             bg = t['WARN_BG'] if getattr(w, '_invalid', False) else t['ENTRY_BG']
@@ -414,23 +549,31 @@ class App(tk.Tk):
                        buttonbackground=t['BTN_BG'],
                        insertbackground=t['TEXT'],
                        highlightbackground=t['BG'], highlightcolor=t['BG'])
-        for w in self._tw['borders']:   w.configure(bg=t['BORDER'])
-        for w in self._tw['btns']:      w.configure(bg=t['BTN_BG'], fg=t['TEXT'],
-                                                     activebackground=t['ENTRY_BG'],
-                                                     activeforeground=t['TEXT'],
-                                                     highlightbackground=t['BG'],
-                                                     highlightcolor=t['BG'])
-        for w in self._tw['checks']:    w.configure(bg=t['BG'], fg=t['TEXT'],
-                                                     selectcolor=t['ENTRY_BG'],
-                                                     activebackground=t['BG'],
-                                                     activeforeground=t['TEXT'],
-                                                     highlightbackground=t['BG'],
-                                                     highlightcolor=t['BG'])
-        self._toggle_btn.configure(text='ライト' if self._dark else 'ダーク')
-        if hasattr(self, '_toggle_sw'):
-            self._toggle_sw.configure_bg(t['BG'])
-
-        self._apply_titlebar_theme()
+        for w in tw['borders']:
+            if w.winfo_exists(): w.configure(bg=t['BORDER'])
+        for w in tw['btns']:
+            if w.winfo_exists():
+                w.configure(bg=t['BTN_BG'], fg=t['TEXT'],
+                           activebackground=t['ENTRY_BG'],
+                           activeforeground=t['TEXT'],
+                           highlightbackground=t['BG'],
+                           highlightcolor=t['BG'])
+        for w in tw['checks']:
+            if w.winfo_exists():
+                w.configure(bg=t['BG'], fg=t['TEXT'],
+                           selectcolor=t['ENTRY_BG'],
+                           activebackground=t['BG'],
+                           activeforeground=t['TEXT'],
+                           highlightbackground=t['BG'],
+                           highlightcolor=t['BG'])
+        for w in tw['radios']:
+            if w.winfo_exists():
+                w.configure(bg=t['BG'], fg=t['TEXT'],
+                           selectcolor=t['ENTRY_BG'],
+                           activebackground=t['BG'],
+                           activeforeground=t['TEXT'],
+                           highlightbackground=t['BG'],
+                           highlightcolor=t['BG'])
 
     def _apply_titlebar_theme(self) -> None:
         if sys.platform != 'win32':
@@ -444,8 +587,24 @@ class App(tk.Tk):
         TitleBarThemeHelper.apply(
             hwnd, self._dark, t['CAPTION'], t['CAPTION_TEXT'])
 
-    def _toggle_theme(self) -> None:
-        self._dark = not self._dark
+    def _apply_settings_titlebar_theme(self) -> None:
+        if sys.platform != 'win32':
+            return
+        win = self._settings_win
+        if win is None or not win.winfo_exists():
+            return
+        t = THEMES['dark' if self._dark else 'light']
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        except Exception:
+            return
+        TitleBarThemeHelper.apply(
+            hwnd, self._dark, t['CAPTION'], t['CAPTION_TEXT'])
+
+    def _apply_theme_choice(self, choice: str) -> None:
+        """設定ウィンドウのラジオボタンから、指定されたテーマを適用する。"""
+        self._dark = (choice == 'dark')
         self._apply_theme()
         # settings.update() は他のキーを一切壊さずに theme だけを更新する。
         self._cfg = settings.update(theme='dark' if self._dark else 'light')
@@ -752,6 +911,7 @@ class App(tk.Tk):
         # 戻ってしまうと (モニタが消える・在席状態が誤表示される等)
         # アプリの存在意義に関わる事故になるため、適用直前のON/OFF状態を
         # 必ず記録してから終了する。
+        self._close_settings_window()
         running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
         self._cfg = settings.update(resume_after_update=running)
         self._save_position()
@@ -783,6 +943,7 @@ class App(tk.Tk):
             if not messagebox.askyesno(
                     "I'm fine", '動作中です。終了しますか？', parent=self):
                 return
+        self._close_settings_window()
         self._save_position()
         icon_ref = self._tray_icon
         self._tray_icon = None
@@ -808,6 +969,8 @@ class App(tk.Tk):
             self._minimize_to_tray()
 
     def _minimize_to_tray(self) -> None:
+        # メインが隠れているのに設定ウィンドウだけ浮いている状態を避ける。
+        self._close_settings_window()
         try:
             import pystray
             import pystray._win32
@@ -932,6 +1095,7 @@ class App(tk.Tk):
             if not messagebox.askyesno(
                     "I'm fine", '動作中です。終了しますか？', parent=self):
                 return
+        self._close_settings_window()
         self._save_position()
         icon_ref = self._tray_icon
         self._tray_icon = None
