@@ -1,3 +1,4 @@
+import datetime
 import hashlib
 import json
 import os
@@ -12,6 +13,65 @@ import urllib.request
 
 REQUEST_TIMEOUT = 10
 DOWNLOAD_TIMEOUT = 60
+
+# 更新直後に新プロセス側が起動する際に付与する引数と、その待機時間。
+# main.py 側で解釈される (updater.py からは import して使うだけ)。
+AFTER_UPDATE_ARG = '--after-update'
+AFTER_UPDATE_WAIT_SEC = 30   # 更新直後にミューテックス取得を粘る上限
+PREV_PROCESS_WAIT_SEC = 15  # 旧プロセスの終了を待つ上限
+
+# GitHub API は User-Agent の送信を要求する (無いと 403 を返されることがある)。
+# ui.py から VERSION を import すると循環 import の懸念があるため、
+# 呼び出し元 (check_and_apply_async) から実際のバージョンを渡してもらい、
+# 直接 check_latest()/download_and_verify() を呼ぶ場合のためにデフォルト値を用意する。
+DEFAULT_USER_AGENT = 'ImFine-Updater'
+
+# update.log の上限サイズ。これを超えたら古い方を捨てて切り詰める。
+LOG_MAX_BYTES = 256 * 1024
+
+
+def _log_dir() -> str:
+    """ログの保存先ディレクトリ。settings.py の _get_path() と同じ
+    フォルダ (%APPDATA%\\ImFine もしくは ~/.config/ImFine) を指すよう、
+    フォルダ決定ロジックだけを小さく複製する
+    (settings.py を import しても循環はしないが、
+    settings._get_path() は settings.json 用の副作用 (旧フォルダからの
+    コピー) を持つ private 関数のため、ログ専用に独立させておく)。
+    """
+    if os.name == 'nt':
+        base = os.environ.get(
+            'APPDATA', os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming'))
+    else:
+        base = os.path.join(os.path.expanduser('~'), '.config')
+    return os.path.join(base, 'ImFine')
+
+
+def _log(message: str) -> None:
+    """update.log に1行追記する。
+
+    ログ出力自体の失敗 (ディスクフル・権限なし・APPDATA が不正なパス等) で
+    アプリを落とさないよう、あらゆる例外をここで握りつぶす。
+    """
+    try:
+        d = _log_dir()
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, 'update.log')
+
+        try:
+            if os.path.getsize(path) > LOG_MAX_BYTES:
+                with open(path, 'rb') as f:
+                    f.seek(-LOG_MAX_BYTES // 2, os.SEEK_END)
+                    tail = f.read()
+                with open(path, 'wb') as f:
+                    f.write(tail)
+        except OSError:
+            pass
+
+        ts = datetime.datetime.now().isoformat(timespec='seconds')
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(f'[{ts}] {message}\n')
+    except Exception:
+        pass
 
 # 更新確認先として許可するホスト (settings.json は同一ユーザー権限の他プロセスから
 # 書き換えられうるため、任意のホストを更新元にできてしまわないよう固定する)
@@ -71,22 +131,44 @@ def _is_allowed_url(url: str, allowed_hosts) -> bool:
     return parsed.hostname in allowed_hosts
 
 
-def check_latest(url: str) -> dict | None:
+def check_latest(url: str, user_agent: str = DEFAULT_USER_AGENT) -> dict | None:
     """最新リリース情報を取得する。失敗時は None (起動をブロックしない)。
     URL のホストが api.github.com でない場合は何もせず None を返す。
+    draft / prerelease のリリースは更新対象にしないため None を返す。
     """
+    _log(f'確認開始: url={url}')
     if not _is_allowed_url(url, (ALLOWED_API_HOST,)):
+        _log(f'確認失敗: 許可されていないホスト url={url}')
         return None
 
-    req = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json'})
+    req = urllib.request.Request(url, headers={
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': user_agent,
+    })
     try:
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
             release = json.loads(resp.read().decode('utf-8'))
-    except (urllib.error.URLError, OSError, ValueError):
+    except urllib.error.HTTPError as e:
+        _log(f'確認失敗: HTTPエラー status={e.code}')
+        return None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        _log(f'確認失敗: {type(e).__name__}: {e}')
         return None
 
     if not isinstance(release, dict):
+        _log('確認失敗: レスポンスがオブジェクトではない')
         return None
+
+    tag = release.get('tag_name', '')
+    _log(f'取得したtag_name: {tag}')
+
+    if release.get('draft'):
+        _log('確認結果: draftリリースのため対象外とする')
+        return None
+    if release.get('prerelease'):
+        _log('確認結果: prereleaseリリースのため対象外とする')
+        return None
+
     return release
 
 
@@ -114,7 +196,8 @@ def _sha256_of(path: str) -> str | None:
         return None
 
 
-def download_and_verify(asset: dict, dest_dir: str) -> str | None:
+def download_and_verify(asset: dict, dest_dir: str,
+                        user_agent: str = DEFAULT_USER_AGENT) -> str | None:
     """asset を dest_dir 内にダウンロードし SHA256 で検証する。
     digest が無い/一致しない、ダウンロードURLが許可されたホストでない、
     サイズが上限を超える、などの場合は None を返し、更新を諦める
@@ -126,17 +209,23 @@ def download_and_verify(asset: dict, dest_dir: str) -> str | None:
     """
     digest = asset.get('digest', '')  # GitHub が付与する 'sha256:xxxx' 形式
     if not digest.startswith('sha256:'):
+        _log('ダウンロード失敗: digestが無い/形式が不正')
         return None
     expected = digest.split(':', 1)[1].lower()
 
     url = asset.get('browser_download_url', '')
     if not _is_allowed_url(url, ALLOWED_DOWNLOAD_HOSTS):
+        _log(f'ダウンロード失敗: 許可されていないホスト url={url}')
         return None
 
+    _log(f'ダウンロード開始: url={url}')
     fd, tmp_path = tempfile.mkstemp(prefix='imfine_update_', suffix='.exe', dir=dest_dir)
     os.close(fd)
     try:
-        req = urllib.request.Request(url, headers={'Accept': 'application/octet-stream'})
+        req = urllib.request.Request(url, headers={
+            'Accept': 'application/octet-stream',
+            'User-Agent': user_agent,
+        })
         with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp, \
                 open(tmp_path, 'wb') as out:
             total = 0
@@ -148,55 +237,50 @@ def download_and_verify(asset: dict, dest_dir: str) -> str | None:
                 if total > MAX_DOWNLOAD_BYTES:
                     raise OSError('download exceeds size limit')
                 out.write(chunk)
-    except (urllib.error.URLError, OSError):
+    except urllib.error.HTTPError as e:
+        _log(f'ダウンロード失敗: HTTPエラー status={e.code}')
         _safe_remove(tmp_path)
         return None
+    except (urllib.error.URLError, OSError) as e:
+        _log(f'ダウンロード失敗: {type(e).__name__}: {e}')
+        _safe_remove(tmp_path)
+        return None
+
+    _log(f'ダウンロード完了: {total} バイト')
 
     actual = _sha256_of(tmp_path)
     if actual is None:
+        _log('検証失敗: ダウンロードしたファイルの読み込みに失敗')
         return None
     if actual.lower() != expected:
+        _log(f'検証失敗: SHA256不一致 expected={expected} actual={actual}')
         _safe_remove(tmp_path)
         return None
 
+    _log('検証成功: SHA256が一致')
     return tmp_path
 
 
 def _spawn_restart(current_exe: str, old_pid: int) -> bool:
-    """自プロセスの終了を待ってから新しい exe を起動する別プロセスを仕込む。
+    """新しい exe を直接起動する。
 
-    PowerShell の Wait-Process で旧プロセスの終了を実際に待つため、
-    固定の待ち時間 (旧: 2秒) に依存しない。単一引用符文字列を使うことで
-    環境変数展開による '%' パス破損 (例 C:\\100%done\\) も回避する。
-    PowerShell の起動に失敗した場合は、従来の cmd 方式にフォールバックする。
+    以前は PowerShell の Wait-Process 経由で待たせてから起動していたが、
+    親プロセス (自分) が死んだ後に外部プロセスが生き残って正しく動くことに
+    依存しており壊れやすかった。参考実装 (VoiceDock/Pane) はいずれも
+    Process.Start で新しい exe を直接起動し、旧プロセスの終了待ちは
+    新プロセス側 (--after-update 引数) に委ねている。それに合わせる。
     """
-    def _q(path: str) -> str:
-        # PowerShell の単一引用符文字列内でのエスケープは '' に二重化する
-        return path.replace("'", "''")
-
-    ps_cmd = (
-        f"Wait-Process -Id {old_pid} -Timeout 30 -ErrorAction SilentlyContinue; "
-        f"Start-Process -FilePath '{_q(current_exe)}'"
-    )
     try:
         subprocess.Popen(
-            ['powershell', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
-             '-Command', ps_cmd],
+            [current_exe, AFTER_UPDATE_ARG, str(old_pid)],
             creationflags=subprocess.DETACHED_PROCESS,
+            cwd=os.path.dirname(current_exe),
             close_fds=True,
         )
+        _log(f'新プロセスの起動: {current_exe} {AFTER_UPDATE_ARG} {old_pid}')
         return True
-    except OSError:
-        pass
-
-    try:
-        subprocess.Popen(
-            ['cmd', '/c', f'ping 127.0.0.1 -n 3 >nul & start "" "{current_exe}"'],
-            creationflags=subprocess.DETACHED_PROCESS,
-            close_fds=True,
-        )
-        return True
-    except OSError:
+    except OSError as e:
+        _log(f'新プロセスの起動に失敗: {type(e).__name__}: {e}')
         return False
 
 
@@ -214,6 +298,7 @@ def apply_update(new_exe_path: str) -> bool:
     「exe が存在しない」危険な時間帯を最小化できる。
     """
     if not getattr(sys, 'frozen', False):
+        _log('適用失敗: frozen (PyInstaller exe) 実行ではない')
         _safe_remove(new_exe_path)
         return False
 
@@ -221,6 +306,7 @@ def apply_update(new_exe_path: str) -> bool:
     current_dir = os.path.dirname(current_exe)
 
     if not _can_write(current_dir):
+        _log(f'適用失敗: 書き込み権限なし dir={current_dir}')
         _safe_remove(new_exe_path)
         return False
 
@@ -229,21 +315,26 @@ def apply_update(new_exe_path: str) -> bool:
 
     try:
         os.rename(current_exe, old_path)
-    except OSError:
+    except OSError as e:
+        _log(f'適用失敗: .oldへのリネームに失敗 {type(e).__name__}: {e}')
         _safe_remove(new_exe_path)
         return False
+    _log(f'適用: .oldへのリネーム完了 ({old_path})')
 
     try:
         os.replace(new_exe_path, current_exe)
-    except OSError:
+    except OSError as e:
+        _log(f'適用失敗: 新exeの配置に失敗 {type(e).__name__}: {e}')
         try:
             os.rename(old_path, current_exe)  # ロールバック
         except OSError:
             pass
         _safe_remove(new_exe_path)  # replace が部分的に失敗しても残骸を残さない
         return False
+    _log('適用: 新exeの配置完了')
 
     if not _spawn_restart(current_exe, os.getpid()):
+        _log('適用失敗: 新プロセスの起動に失敗したためロールバックする')
         try:
             os.rename(current_exe, new_exe_path)  # 新しい exe をいったん退避
             os.rename(old_path, current_exe)      # ロールバック
@@ -267,7 +358,10 @@ def recover_or_cleanup() -> None:
     """
     if not getattr(sys, 'frozen', False):
         return
-    _safe_remove(sys.executable + '.old')
+    old_path = sys.executable + '.old'
+    if os.path.exists(old_path):
+        _safe_remove(old_path)
+        _log(f'前回更新の残骸を削除した: {old_path}')
 
 
 def check_and_apply_async(current_version: str, url: str,
@@ -303,37 +397,46 @@ def check_and_apply_async(current_version: str, url: str,
         except Exception:
             pass
 
+    user_agent = f'ImFine/{current_version}'
+
     def _worker():
         _notify('checking')
-        release = check_latest(url)
+        _log(f'現在のバージョン: {current_version}')
+        release = check_latest(url, user_agent=user_agent)
         if release is None:
             _notify('failed')
             return
         tag = release.get('tag_name', '')
         if not _is_newer(tag, current_version):
+            _log(f'最新版です (現在 {current_version}, 最新 {tag})')
             _notify('up_to_date')
             return
+        _log(f'新しい版があります (現在 {current_version} -> {tag})')
         asset = find_exe_asset(release)
         if asset is None:
+            _log('確認失敗: exeアセットが見つからない')
             _notify('failed')
             return
 
         if not getattr(sys, 'frozen', False):
+            _log('確認失敗: frozen (PyInstaller exe) 実行ではないため更新をスキップ')
             _notify('failed')
             return
         current_dir = os.path.dirname(sys.executable)
         if not _can_write(current_dir):
+            _log(f'確認失敗: 書き込み権限なし dir={current_dir}')
             _notify('failed')
             return
 
         _notify('downloading')
-        new_path = download_and_verify(asset, current_dir)
+        new_path = download_and_verify(asset, current_dir, user_agent=user_agent)
         if new_path is None:
             _notify('failed')
             return
 
         _notify('applying')
         if apply_update(new_path):
+            _log('更新完了。新プロセスへ引き継ぐ')
             if on_ready_to_restart is not None:
                 try:
                     on_ready_to_restart()
