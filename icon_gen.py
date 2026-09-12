@@ -23,14 +23,21 @@ def _draw_available(size: int) -> Image.Image:
 
 def main() -> None:
     sizes = [16, 32, 48, 256]
-    imgs = [_draw_available(s) for s in sizes]
-    imgs[0].save(
+    imgs = {s: _draw_available(s) for s in sizes}
+
+    # PIL は「基準画像より大きいサイズ」を ICO に書き出せない。
+    # 最小サイズを基準にすると他のサイズが黙って捨てられ、16x16 しか
+    # 入らない ICO になってしまうため、必ず最大サイズを基準にする。
+    # append_images で各サイズを個別に描いたものを渡し、単純な縮小ではなく
+    # サイズごとに線の太さを最適化した絵を埋め込む。
+    base = imgs[max(sizes)]
+    base.save(
         'icon.ico',
         format='ICO',
         sizes=[(s, s) for s in sizes],
-        append_images=imgs[1:],
+        append_images=[imgs[s] for s in sizes if s != max(sizes)],
     )
-    _draw_available(256).save('icon.png')
+    base.save('icon.png')
     print('Generated icon.ico and icon.png')
 
 
