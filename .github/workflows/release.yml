@@ -97,8 +97,40 @@ jobs:
       - name: Build exe
         run: pyinstaller ImFine.spec
 
+      # リリース本文は「## 変更点」と「## ダウンロード」の2節と、README への案内1行だけにする。
+      # インストールや更新の方法、機能の説明は README に置き、リリースには書かない。
+      # 自動アップデート (updater.py) は本文を読まず、tag_name と exe の assets
+      # (digest / browser_download_url) だけを使うので、本文の形を変えても更新には影響しない。
+      - name: Compose release notes
+        id: notes
+        shell: bash
+        run: |
+          CHANGES="${{ steps.changelog.outputs.notes_path }}"
+          EXE="dist/ImFine.exe"
+          OUT="$RUNNER_TEMP/release_body.md"
+
+          SIZE=$(stat -c %s "$EXE")
+          SIZE_TEXT=$(awk -v s="$SIZE" 'BEGIN { if (s >= 1048576) printf "%.1f MB", s / 1048576; else printf "%.1f KB", s / 1024 }')
+          SHA=$(sha256sum "$EXE" | cut -d ' ' -f 1)
+
+          {
+            echo "## 変更点"
+            echo ""
+            cat "$CHANGES"
+            echo ""
+            echo "## ダウンロード"
+            echo ""
+            echo "| ファイル | サイズ | SHA256 |"
+            echo "| --- | --- | --- |"
+            echo "| $(basename "$EXE") | $SIZE_TEXT | \`$SHA\` |"
+            echo ""
+            echo "インストールと更新の方法は [README](https://github.com/Yu5rin/Imfine#インストールと更新) をご覧ください。"
+          } > "$OUT"
+
+          echo "body_path=$OUT" >> $GITHUB_OUTPUT
+
       - name: Create release
         shell: bash
-        run: gh release create ${{ steps.ver.outputs.tag }} dist/ImFine.exe --title "I'm fine ${{ steps.ver.outputs.tag }}" --notes-file "${{ steps.changelog.outputs.notes_path }}"
+        run: gh release create ${{ steps.ver.outputs.tag }} dist/ImFine.exe --title "${{ steps.ver.outputs.tag }}" --notes-file "${{ steps.notes.outputs.body_path }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
