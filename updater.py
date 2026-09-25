@@ -74,12 +74,28 @@ def _log(message: str) -> None:
         pass
 
 # 更新確認先として許可するホスト (settings.json は同一ユーザー権限の他プロセスから
-# 書き換えられうるため、任意のホストを更新元にできてしまわないよう固定する)
+# 書き換えられうるため、任意のホストを更新元にできてしまわないよう固定する)。
+# リポジトリ名の変更などで API が 301 を返しても、行き先は api.github.com のままなので
+# リダイレクト先もこのホストに限る。
 ALLOWED_API_HOST = 'api.github.com'
 # ダウンロードURL (browser_download_url) として許可するホスト。
-# GitHub の Release asset は github.com から objects.githubusercontent.com へ
-# リダイレクトされるため、両方を許可する。
-ALLOWED_DOWNLOAD_HOSTS = ('github.com', 'objects.githubusercontent.com')
+ALLOWED_DOWNLOAD_HOSTS = ('github.com',)
+# ダウンロードのリダイレクト先として許可するホスト。
+# GitHub の Release asset は github.com から配信用のホストへ 302 でリダイレクトされる。
+#
+# 以前はここに objects.githubusercontent.com を並べて「リダイレクトされるため許可する」と
+# 書いていたが、実装は最初の URL しか確かめておらず、リダイレクトは urllib が黙って
+# 辿っていた (コメントと実装がずれていた)。いまはリダイレクトのたびに
+# _AllowedHostRedirectHandler で行き先を確かめる。
+#
+# 2026-09-25 に v1.13.2 の exe で実際に確かめたところ、行き先は
+# objects.githubusercontent.com ではなく release-assets.githubusercontent.com だった。
+# コメントの記述どおりに objects... だけを許可して検査を足すと、更新が必ず失敗する。
+# objects.githubusercontent.com は以前の配信先で、GitHub が戻す可能性もあるため残す。
+ALLOWED_DOWNLOAD_REDIRECT_HOSTS = ALLOWED_DOWNLOAD_HOSTS + (
+    'release-assets.githubusercontent.com',
+    'objects.githubusercontent.com',
+)
 
 # ダウンロードサイズの上限。フィードが汚染された場合にディスクを
 # 埋め尽くされないようにするための安全弁。
@@ -131,6 +147,49 @@ def _is_allowed_url(url: str, allowed_hosts) -> bool:
     return parsed.hostname in allowed_hosts
 
 
+class DisallowedRedirect(urllib.error.HTTPError):
+    """許可されていない行き先へのリダイレクトを断ったことを表す。"""
+
+
+class _AllowedHostRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """リダイレクトのたびに、行き先が https で allowed_hosts のいずれかかを確かめる。
+
+    urllib の既定の HTTPRedirectHandler は、http / https / ftp なら行き先を
+    確かめずに辿る。最初の URL だけを確かめても、リダイレクト先で別のホストへ
+    誘導されれば意味がないため、行き先ごとに _is_allowed_url を通す。
+    """
+
+    def __init__(self, allowed_hosts):
+        super().__init__()
+        self._allowed_hosts = tuple(allowed_hosts)
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # newurl は呼び出し元 (http_error_302) で絶対 URL に直されている
+        if not _is_allowed_url(newurl, self._allowed_hosts):
+            raise DisallowedRedirect(
+                newurl, code,
+                f'redirect to a disallowed location: {newurl}', headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _without_query(url: str) -> str:
+    """ログに残す用。配信先の URL は署名付きのクエリを持つので、そこを落とす。"""
+    try:
+        return urllib.parse.urlsplit(url)._replace(query='', fragment='').geturl()
+    except ValueError:
+        return '(URL を読めない)'
+
+
+def _open(url: str, headers: dict, timeout: float, redirect_hosts):
+    """url を開く。リダイレクト先は redirect_hosts に限る。
+
+    最初の url が許可されたものかどうかは呼び出し側で確かめておくこと。
+    """
+    opener = urllib.request.build_opener(_AllowedHostRedirectHandler(redirect_hosts))
+    req = urllib.request.Request(url, headers=headers)
+    return opener.open(req, timeout=timeout)
+
+
 def check_latest(url: str, user_agent: str = DEFAULT_USER_AGENT) -> dict | None:
     """最新リリース情報を取得する。失敗時は None (起動をブロックしない)。
     URL のホストが api.github.com でない場合は何もせず None を返す。
@@ -141,13 +200,16 @@ def check_latest(url: str, user_agent: str = DEFAULT_USER_AGENT) -> dict | None:
         _log(f'確認失敗: 許可されていないホスト url={url}')
         return None
 
-    req = urllib.request.Request(url, headers={
+    headers = {
         'Accept': 'application/vnd.github+json',
         'User-Agent': user_agent,
-    })
+    }
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        with _open(url, headers, REQUEST_TIMEOUT, (ALLOWED_API_HOST,)) as resp:
             release = json.loads(resp.read().decode('utf-8'))
+    except DisallowedRedirect as e:
+        _log(f'確認失敗: 許可されていないリダイレクト先 url={_without_query(e.filename)}')
+        return None
     except urllib.error.HTTPError as e:
         _log(f'確認失敗: HTTPエラー status={e.code}')
         return None
@@ -222,11 +284,11 @@ def download_and_verify(asset: dict, dest_dir: str,
     fd, tmp_path = tempfile.mkstemp(prefix='imfine_update_', suffix='.exe', dir=dest_dir)
     os.close(fd)
     try:
-        req = urllib.request.Request(url, headers={
+        headers = {
             'Accept': 'application/octet-stream',
             'User-Agent': user_agent,
-        })
-        with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp, \
+        }
+        with _open(url, headers, DOWNLOAD_TIMEOUT, ALLOWED_DOWNLOAD_REDIRECT_HOSTS) as resp, \
                 open(tmp_path, 'wb') as out:
             total = 0
             while True:
@@ -237,6 +299,10 @@ def download_and_verify(asset: dict, dest_dir: str,
                 if total > MAX_DOWNLOAD_BYTES:
                     raise OSError('download exceeds size limit')
                 out.write(chunk)
+    except DisallowedRedirect as e:
+        _log(f'ダウンロード失敗: 許可されていないリダイレクト先 url={_without_query(e.filename)}')
+        _safe_remove(tmp_path)
+        return None
     except urllib.error.HTTPError as e:
         _log(f'ダウンロード失敗: HTTPエラー status={e.code}')
         _safe_remove(tmp_path)
