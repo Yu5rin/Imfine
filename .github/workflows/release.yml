@@ -129,8 +129,10 @@ jobs:
 
           echo "body_path=$OUT" >> $GITHUB_OUTPUT
 
+      # 下書き（--draft）で作り、「変更点」を書き入れてから公開する。下書きは releases/latest に
+      # 出ないので、公開するまで自動アップデートの対象にならず、仮の本文も人目に触れない。
       - name: Create release
         shell: bash
-        run: gh release create ${{ steps.ver.outputs.tag }} dist/ImFine.exe --title "${{ steps.ver.outputs.tag }}" --notes-file "${{ steps.notes.outputs.body_path }}"
+        run: gh release create ${{ steps.ver.outputs.tag }} dist/ImFine.exe --draft --title "${{ steps.ver.outputs.tag }}" --notes-file "${{ steps.notes.outputs.body_path }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
