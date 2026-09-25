@@ -39,6 +39,28 @@ jobs:
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           fi
 
+      # 画面に出るバージョン (ui.py の VERSION。アプリ内でバージョンを持つのはここだけで、
+      # 自動アップデートもこの値と tag_name を比べる) がタグとずれたまま配らないよう、
+      # 一致しなければここで止める。v1.3.1 / v1.3.2 / v1.4.1 / v1.4.2 は ui.py を上げずに
+      # タグだけ進めたため、画面には1つ前の版が出ていた。ずれた版は自動アップデートでも
+      # 「古い」と判断され、起動のたびに同じ版を落とし直すことになる。
+      # 既存のリリースとタグを消す手順 (手動実行時) より前に置き、止まっても何も壊さない。
+      - name: Check tag matches app version
+        shell: bash
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          APP_VERSION=$(python -c "import re; m=re.search(r\"^VERSION = '([^']+)'\", open('ui.py',encoding='utf-8').read(), re.M); print(m.group(1) if m else '')")
+          if [ -z "$APP_VERSION" ]; then
+            echo "::error::ui.py から VERSION を読み取れません。「VERSION = 'X.Y.Z'」の行があるか確かめてください。"
+            exit 1
+          fi
+          if [ "$TAG" != "v$APP_VERSION" ]; then
+            echo "::error::タグ ($TAG) とアプリのバージョン (ui.py の VERSION = '$APP_VERSION') が一致しません。ui.py の VERSION を上げたコミットにタグを付けるか、バージョンの入力を v$APP_VERSION にしてください。"
+            exit 1
+          fi
+          echo "タグとアプリのバージョンが一致: $TAG"
+
       - name: Check CHANGELOG entry
         id: changelog
         shell: bash
