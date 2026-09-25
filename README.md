@@ -103,6 +103,8 @@ python icon_gen.py
 pyinstaller ImFine.spec
 ```
 
+テストは `python -m unittest discover -s tests` で回します（標準ライブラリだけで動きます）。
+
 GitHub Actions の Build and Release ワークフローを手動実行すると、
 ui.py のバージョンを読み取って自動でタグ付け・リリースされます。
 
