@@ -39,6 +39,28 @@ jobs:
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           fi
 
+      # 画面に出るバージョン (ui.py の VERSION。アプリ内でバージョンを持つのはここだけで、
+      # 自動アップデートもこの値と tag_name を比べる) がタグとずれたまま配らないよう、
+      # 一致しなければここで止める。v1.3.1 / v1.3.2 / v1.4.1 / v1.4.2 は ui.py を上げずに
+      # タグだけ進めたため、画面には1つ前の版が出ていた。ずれた版は自動アップデートでも
+      # 「古い」と判断され、起動のたびに同じ版を落とし直すことになる。
+      # 既存のリリースとタグを消す手順 (手動実行時) より前に置き、止まっても何も壊さない。
+      - name: Check tag matches app version
+        shell: bash
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          APP_VERSION=$(python -c "import re; m=re.search(r\"^VERSION = '([^']+)'\", open('ui.py',encoding='utf-8').read(), re.M); print(m.group(1) if m else '')")
+          if [ -z "$APP_VERSION" ]; then
+            echo "::error::ui.py から VERSION を読み取れません。「VERSION = 'X.Y.Z'」の行があるか確かめてください。"
+            exit 1
+          fi
+          if [ "$TAG" != "v$APP_VERSION" ]; then
+            echo "::error::タグ ($TAG) とアプリのバージョン (ui.py の VERSION = '$APP_VERSION') が一致しません。ui.py の VERSION を上げたコミットにタグを付けるか、バージョンの入力を v$APP_VERSION にしてください。"
+            exit 1
+          fi
+          echo "タグとアプリのバージョンが一致: $TAG"
+
       - name: Check CHANGELOG entry
         id: changelog
         shell: bash
@@ -97,8 +119,42 @@ jobs:
       - name: Build exe
         run: pyinstaller ImFine.spec
 
+      # リリース本文は「## 変更点」と「## ダウンロード」の2節と、README への案内1行だけにする。
+      # インストールや更新の方法、機能の説明は README に置き、リリースには書かない。
+      # 自動アップデート (updater.py) は本文を読まず、tag_name と exe の assets
+      # (digest / browser_download_url) だけを使うので、本文の形を変えても更新には影響しない。
+      - name: Compose release notes
+        id: notes
+        shell: bash
+        run: |
+          CHANGES="${{ steps.changelog.outputs.notes_path }}"
+          EXE="dist/ImFine.exe"
+          OUT="$RUNNER_TEMP/release_body.md"
+
+          SIZE=$(stat -c %s "$EXE")
+          SIZE_TEXT=$(awk -v s="$SIZE" 'BEGIN { if (s >= 1048576) printf "%.1f MB", s / 1048576; else printf "%.1f KB", s / 1024 }')
+          SHA=$(sha256sum "$EXE" | cut -d ' ' -f 1)
+
+          {
+            echo "## 変更点"
+            echo ""
+            cat "$CHANGES"
+            echo ""
+            echo "## ダウンロード"
+            echo ""
+            echo "| ファイル | サイズ | SHA256 |"
+            echo "| --- | --- | --- |"
+            echo "| $(basename "$EXE") | $SIZE_TEXT | \`$SHA\` |"
+            echo ""
+            echo "インストールと更新の方法は [README](https://github.com/Yu5rin/Imfine#インストールと更新) をご覧ください。"
+          } > "$OUT"
+
+          echo "body_path=$OUT" >> $GITHUB_OUTPUT
+
+      # 下書き（--draft）で作り、「変更点」を書き入れてから公開する。下書きは releases/latest に
+      # 出ないので、公開するまで自動アップデートの対象にならず、仮の本文も人目に触れない。
       - name: Create release
         shell: bash
-        run: gh release create ${{ steps.ver.outputs.tag }} dist/ImFine.exe --title "I'm fine ${{ steps.ver.outputs.tag }}" --notes-file "${{ steps.changelog.outputs.notes_path }}"
+        run: gh release create ${{ steps.ver.outputs.tag }} dist/ImFine.exe --draft --title "${{ steps.ver.outputs.tag }}" --notes-file "${{ steps.notes.outputs.body_path }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
