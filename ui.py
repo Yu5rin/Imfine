@@ -2,6 +2,7 @@ import datetime
 import os
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox
 
@@ -13,7 +14,7 @@ from controller import Controller
 from titlebar import TitleBarThemeHelper
 
 
-VERSION = '1.13.3'
+VERSION = '1.14.0'
 
 # フォントサイズ (役割ごとに統一する。8pt は小さすぎるため使わない)
 FONT_SM = 9   # 補助的なラベル・ボタン
@@ -237,6 +238,15 @@ class App(tk.Tk):
         if self._cfg.get('resume_after_update'):
             self._cfg = settings.update(resume_after_update=False)
 
+        # 更新適用直前にトレイへ格納されていたかを、起動時に一度だけ復元するためのフラグ。
+        # こちらも立ちっぱなしを防ぐため、読んだら即クリアする。
+        self._resume_in_tray = bool(self._cfg.get('resume_in_tray'))
+        if self._cfg.get('resume_in_tray'):
+            self._cfg = settings.update(resume_in_tray=False)
+
+        # 次に定期更新確認を行う時刻 (epoch 秒)。_check_for_updates が更新する。
+        self._next_update_check = time.time() + updater.RUNTIME_CHECK_INTERVAL_SEC
+
         self._tw: dict[str, list] = {
             'bg_frames': [],
             'labels':    [],
@@ -282,7 +292,7 @@ class App(tk.Tk):
         self.after(3000, self._check_for_updates)
 
         # 「起動時にタスクトレイへ格納」が有効なら、レイアウト確定後に格納する。
-        if self._cfg.get('start_in_tray'):
+        if self._cfg.get('start_in_tray') or self._resume_in_tray:
             self.update_idletasks()
             self.after(200, self._minimize_to_tray)
 
@@ -626,7 +636,7 @@ class App(tk.Tk):
         """UIが管理する項目だけを現在値で上書きした設定全体を返す。
 
         self._cfg のコピーをベースにすることで、update_check_url や
-        auto_update_enabled / resume_after_update のような UI 側で
+        auto_update_enabled / resume_after_update / resume_in_tray のような UI 側で
         持っていないキーを保存のたびに消してしまわないようにする。
         """
         try:
@@ -866,11 +876,19 @@ class App(tk.Tk):
                     except Exception:
                         pass
         self._update_status()
+        # 起動中の定期更新確認。起動直後・手動確認も含め、_check_for_updates が
+        # 呼ばれるたびに次回時刻が先送りされる。
+        if time.time() >= self._next_update_check:
+            self._check_for_updates()
         self.after(1000, self._check_stop_timer)
 
     # ── auto update ───────────────────────────────────────────────────────
 
     def _check_for_updates(self, force: bool = False) -> None:
+        # どの経路 (起動直後 / 定期 / 手動) から呼ばれても、ここから
+        # 一定時間後を次回とする。早期 return する場合も先送りする
+        # (自動更新無効時に毎秒呼ばれ続けないため)。
+        self._next_update_check = time.time() + updater.RUNTIME_CHECK_INTERVAL_SEC
         if not getattr(sys, 'frozen', False):
             return  # ソースから実行時は自己置き換えできないので対象外
         if not force and not self._auto_update_enabled.get():
@@ -913,7 +931,11 @@ class App(tk.Tk):
         # 必ず記録してから終了する。
         self._close_settings_window()
         running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
-        self._cfg = settings.update(resume_after_update=running)
+        # トレイ格納中はアイコンが生成されているので、その有無で判定する。
+        # 復元しないと、トレイで作業中に更新が走ると再起動後にウィンドウが前面に出る。
+        in_tray = self._tray_icon is not None
+        self._cfg = settings.update(
+            resume_after_update=running, resume_in_tray=in_tray)
         self._save_position()
         icon_ref = self._tray_icon
         self._tray_icon = None

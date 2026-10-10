@@ -16,6 +16,9 @@ DOWNLOAD_TIMEOUT = 60
 
 # 更新直後に新プロセス側が起動する際に付与する引数と、その待機時間。
 # main.py 側で解釈される (updater.py からは import して使うだけ)。
+# 起動中に更新を確認する間隔 (秒)。常駐ツールで何日も起動しっぱなしになるため。
+RUNTIME_CHECK_INTERVAL_SEC = 6 * 60 * 60
+
 AFTER_UPDATE_ARG = '--after-update'
 AFTER_UPDATE_WAIT_SEC = 30   # 更新直後にミューテックス取得を粘る上限
 PREV_PROCESS_WAIT_SEC = 15  # 旧プロセスの終了を待つ上限

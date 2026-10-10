@@ -15,6 +15,7 @@ DEFAULTS: dict = {
     'start_in_tray': False,        # 起動時に直接トレイへ格納する
     'auto_update_enabled': True,   # 自動アップデートの有効/無効
     'resume_after_update': False,  # 更新再起動後に ON を復元するための内部フラグ
+    'resume_in_tray': False,       # 更新再起動後にトレイ格納を復元するための内部フラグ
     'win_x': None,
     'win_y': None,
     'update_check_url': 'https://api.github.com/repos/Yu5rin/Imfine/releases/latest',
@@ -76,7 +77,8 @@ def _validate(data: dict) -> dict:
         out['theme'] = DEFAULTS['theme']
 
     for key in ('stop_timer_enabled', 'tray_minimize', 'auto_on',
-                'start_in_tray', 'auto_update_enabled', 'resume_after_update'):
+                'start_in_tray', 'auto_update_enabled', 'resume_after_update',
+                'resume_in_tray'):
         out[key] = _to_bool(out.get(key, DEFAULTS[key]))
 
     out['stop_hour'] = _clamp(_to_int_or(out.get('stop_hour'), DEFAULTS['stop_hour']), 0, 23)
