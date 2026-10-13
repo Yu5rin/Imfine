@@ -14,7 +14,7 @@ from controller import Controller
 from titlebar import TitleBarThemeHelper
 
 
-VERSION = '1.14.0'
+VERSION = '1.15.0'
 
 # フォントサイズ (役割ごとに統一する。8pt は小さすぎるため使わない)
 FONT_SM = 9   # 補助的なラベル・ボタン

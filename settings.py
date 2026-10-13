@@ -2,6 +2,7 @@ import json
 import os
 import pathlib
 import shutil
+import sys
 import tempfile
 import threading
 
@@ -27,19 +28,77 @@ DEFAULTS: dict = {
 _LOCK = threading.RLock()
 
 
-def _get_path() -> pathlib.Path:
+# data_dir() の結果のキャッシュ。書き込み可否の判定を起動ごとに繰り返さないため。
+_DATA_DIR = None
+
+
+def _appdata_base() -> pathlib.Path:
+    """従来の保存先の親フォルダ (Windows は %APPDATA%、それ以外は ~/.config)。"""
     if os.name == 'nt':
-        base = pathlib.Path(os.environ.get('APPDATA', pathlib.Path.home() / 'AppData' / 'Roaming'))
-    else:
-        base = pathlib.Path.home() / '.config'
-    d = base / 'ImFine'
+        return pathlib.Path(os.environ.get('APPDATA', pathlib.Path.home() / 'AppData' / 'Roaming'))
+    return pathlib.Path.home() / '.config'
+
+
+def _can_write_dir(d: pathlib.Path) -> bool:
+    """d を作成し、実際に一時ファイルを作って消せるかで書き込み可否を判定する。"""
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        fd, p = tempfile.mkstemp(prefix='.write-test-', dir=str(d))
+        os.close(fd)
+        os.remove(p)
+        return True
+    except OSError:
+        return False
+
+
+def data_dir() -> pathlib.Path:
+    """設定とログの保存先フォルダを返す (無ければ作る)。
+
+    exe と同じフォルダの data サブフォルダを使う (ポータブル形式)。
+    ソース実行時はこのファイルのあるフォルダ (リポジトリ直下) の data。
+    書き込めない場所 (Program Files 配下など) では従来の
+    %APPDATA%\\ImFine (Windows 以外は ~/.config/ImFine) にフォールバックする。
+    """
+    global _DATA_DIR
+    with _LOCK:
+        if _DATA_DIR is not None:
+            return _DATA_DIR
+        if getattr(sys, 'frozen', False):
+            root = pathlib.Path(os.path.dirname(sys.executable))
+        else:
+            root = pathlib.Path(__file__).resolve().parent
+        d = root / 'data'
+        if not _can_write_dir(d):
+            d = _appdata_base() / 'ImFine'
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
+        _DATA_DIR = d
+        return d
+
+
+def _same_file(a: pathlib.Path, b: pathlib.Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return a == b
+
+
+def _get_path() -> pathlib.Path:
+    d = data_dir()
     path = d / 'settings.json'
-    d.mkdir(parents=True, exist_ok=True)
     if not path.exists():
-        old = base / 'Mouser' / 'settings.json'
-        if old.exists():
+        # 新しい保存先にまだ無ければ、従来の保存先から「コピー」する
+        # (元のファイルは巻き戻しに備えて消さない)。
+        base = _appdata_base()
+        for old in (base / 'ImFine' / 'settings.json',
+                    base / 'Mouser' / 'settings.json'):
+            if _same_file(old, path) or not old.exists():
+                continue
             try:
                 shutil.copy2(old, path)
+                break
             except OSError:
                 pass
     return path

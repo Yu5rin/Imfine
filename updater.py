@@ -11,6 +11,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import settings
+
 REQUEST_TIMEOUT = 10
 DOWNLOAD_TIMEOUT = 60
 
@@ -33,22 +35,6 @@ DEFAULT_USER_AGENT = 'ImFine-Updater'
 LOG_MAX_BYTES = 256 * 1024
 
 
-def _log_dir() -> str:
-    """ログの保存先ディレクトリ。settings.py の _get_path() と同じ
-    フォルダ (%APPDATA%\\ImFine もしくは ~/.config/ImFine) を指すよう、
-    フォルダ決定ロジックだけを小さく複製する
-    (settings.py を import しても循環はしないが、
-    settings._get_path() は settings.json 用の副作用 (旧フォルダからの
-    コピー) を持つ private 関数のため、ログ専用に独立させておく)。
-    """
-    if os.name == 'nt':
-        base = os.environ.get(
-            'APPDATA', os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming'))
-    else:
-        base = os.path.join(os.path.expanduser('~'), '.config')
-    return os.path.join(base, 'ImFine')
-
-
 def _log(message: str) -> None:
     """update.log に1行追記する。
 
@@ -56,8 +42,7 @@ def _log(message: str) -> None:
     アプリを落とさないよう、あらゆる例外をここで握りつぶす。
     """
     try:
-        d = _log_dir()
-        os.makedirs(d, exist_ok=True)
+        d = str(settings.data_dir())
         path = os.path.join(d, 'update.log')
 
         try:
