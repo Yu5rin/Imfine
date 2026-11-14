@@ -1,130 +1,173 @@
 import datetime
 import os
+import queue
+import subprocess
 import sys
-import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import messagebox
 
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
+import applog
+import instance
 import settings
+import startup
+import stoptimer
+import theme
+import tray
 import updater
 from controller import Controller
+from theme import THEMES
 from titlebar import TitleBarThemeHelper
 
 
-VERSION = '1.15.0'
+VERSION = '1.16.0'
 
-# フォントサイズ (役割ごとに統一する。8pt は小さすぎるため使わない)
-FONT_SM = 9   # 補助的なラベル・ボタン
-FONT_MD = 10  # チェックボックス・入力欄・ステータス表示
+APP_NAME = "I'm fine"
 
-THEMES: dict = {
-    'light': {
-        'BG':       '#F5F5F5',
-        'TEXT':     '#222222',
-        'MUTED':    '#5F5F5F',
-        'ENTRY_BG': '#FFFFFF',
-        'BTN_BG':   '#E8E8E8',
-        'BORDER':   '#CCCCCC',
-        'WARN_BG':  '#F8D7DA',
-        # タイトルバー (アクセントカラー導入時はここだけ差し替えればよい)
-        'CAPTION':      '#F5F5F5',
-        'CAPTION_TEXT': '#222222',
-    },
-    'dark': {
-        'BG':       '#1E1E1E',
-        'TEXT':     '#D4D4D4',
-        'MUTED':    '#9E9E9E',
-        'ENTRY_BG': '#2D2D2D',
-        'BTN_BG':   '#3C3C3C',
-        'BORDER':   '#444444',
-        'WARN_BG':  '#5C2626',
-        'CAPTION':      '#1E1E1E',
-        'CAPTION_TEXT': '#D4D4D4',
-    },
-}
+# フォントの大きさ (pt)。役割ごとにここだけで決める。
+FONT_HEADING = 9   # 見出し (太字)
+FONT_BODY = 10     # 本文・チェックボックス・入力欄
+FONT_STATUS = 12   # 状態表示 (太字)
+FONT_SMALL = 9     # 補足・バージョン・ボタン
+
+# メイン画面の幅 (96 DPI のときの px)
+MAIN_WIDTH = 300
+
+# 設定「Windows に合わせる」のとき、Windows のテーマを読み直す間隔 (秒)
+SYSTEM_THEME_POLL_SEC = 3
+
+# トレイ・更新・二重起動の合図を取り出す間隔 (ミリ秒)
+PUMP_MS = 100
+
+TRAY_HINT = 'タスクトレイで動作しています。アイコンを右クリックするとメニューが開きます'
 
 
 def _res(name: str) -> str:
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, name)
-    return name
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
 
 
 def _load_tray_image(running: bool):
-    import PIL.BmpImagePlugin  # noqa: F401  pystray HICON 生成に必要
-    img = Image.open(_res('icon.png')).convert('RGBA')
-    img = img.resize((64, 64), Image.LANCZOS)
-    if not running:
-        pixels = img.load()
-        for y in range(img.height):
-            for x in range(img.width):
-                r, g, b, a = pixels[x, y]
-                if a > 100:
-                    gray = int(r * 0.299 + g * 0.587 + b * 0.114)
-                    pixels[x, y] = (gray, gray, gray, a)
-    return img
+    """トレイアイコンの絵。ON はチェック、OFF は一時停止の二本線 (色だけでなく形でも区別する)。"""
+    import PIL.BmpImagePlugin  # noqa: F401  pystray の HICON 生成に必要
+    name = 'icon.png' if running else 'icon_off.png'
+    try:
+        img = Image.open(_res(name)).convert('RGBA')
+    except OSError:
+        img = Image.new('RGBA', (64, 64), '#2E7D32' if running else '#6B7280')
+    return img.resize((64, 64), Image.LANCZOS)
+
+
+def _pick_font_family(root: tk.Misc) -> str:
+    """UI のフォント。Windows は Yu Gothic UI、無ければ Meiryo UI。それ以外の OS は既定の UI フォント。"""
+    if sys.platform == 'win32':
+        try:
+            families = set(tkfont.families(root))
+        except tk.TclError:
+            families = set()
+        for name in ('Yu Gothic UI', 'Meiryo UI'):
+            if name in families:
+                return name
+    try:
+        return tkfont.nametofont('TkDefaultFont', root).actual('family')
+    except (tk.TclError, RuntimeError):
+        return 'TkDefaultFont'
+
+
+def _open_path(path: str) -> bool:
+    """フォルダやファイルを既定のアプリで開く。"""
+    try:
+        if sys.platform == 'win32':
+            os.startfile(path)  # noqa: S606  利用者のデータフォルダを開くだけ
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', path])
+        else:
+            subprocess.Popen(['xdg-open', path],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
+def _rgb(color: str) -> tuple:
+    return theme.hex_to_rgb(color)
 
 
 class _Toggle(tk.Canvas):
-    # 基準サイズ (DPI スケールを掛けてインスタンス属性として保持する)
-    W, H = 200, 72
-    R = 36
-    S = 4
+    """ON/OFF のトグル。クリック・Space・Enter で切り替える。"""
+
+    # 基準の大きさ (96 DPI のときの px)。描くときに scale を掛ける。
+    W, H = 200, 64
+    MARGIN = 4      # フォーカスの枠を描くための余白
+    S = 4           # なめらかに描くための拡大率 (描いてから縮小する)
     ANIM_MS = 16
     ANIM_EASE = 0.22
 
-    OFF_BG = (158, 158, 158)
-    ON_BG  = (76, 175, 80)
-    OFF_E  = (110, 110, 110)
-    ON_E   = (50, 130, 55)
-
-    _font_cache = None
+    _font_cache: dict = {}
 
     def __init__(self, parent, command=None, scale: float = 1.0):
-        # DPI に追従させるため、クラス既定値をスケールしてインスタンス属性にする
+        self._scale = scale
         self.W = max(1, round(_Toggle.W * scale))
         self.H = max(1, round(_Toggle.H * scale))
-        self.R = max(1, round(_Toggle.R * scale))
-        super().__init__(parent, width=self.W, height=self.H,
-                         bd=0, highlightthickness=0, cursor='hand2')
+        self.M = max(2, round(_Toggle.MARGIN * scale))
+        super().__init__(parent, width=self.W + 2 * self.M, height=self.H + 2 * self.M,
+                         bd=0, highlightthickness=0, cursor='hand2', takefocus=1)
         self._on = False
         self._pos = 0.0
         self._cmd = command
+        self._focused = False
+        self._colors = {'on': '#2E7D32', 'off': '#6B7280', 'focus': '#1B1B1B'}
         self._anim_id: str | None = None
         self._photo: ImageTk.PhotoImage | None = None
         self.bind('<Button-1>', lambda _: self._click())
+        self.bind('<space>', lambda _: self._click())
+        self.bind('<Return>', lambda _: self._click())
+        self.bind('<FocusIn>', lambda _: self._set_focus(True))
+        self.bind('<FocusOut>', lambda _: self._set_focus(False))
         self._redraw()
 
     @classmethod
-    def _font(cls):
-        if cls._font_cache is not None:
-            return cls._font_cache
-        size = 14 * cls.S
-        for name in ('arialbd.ttf', 'segoeuib.ttf', 'DejaVuSans-Bold.ttf'):
+    def _font(cls, size: int):
+        if size in cls._font_cache:
+            return cls._font_cache[size]
+        font = None
+        for name in ('segoeuib.ttf', 'arialbd.ttf', 'DejaVuSans-Bold.ttf'):
             try:
-                cls._font_cache = ImageFont.truetype(name, size)
-                return cls._font_cache
+                font = ImageFont.truetype(name, size)
+                break
             except OSError:
                 pass
-        cls._font_cache = ImageFont.load_default()
-        return cls._font_cache
+        if font is None:
+            font = ImageFont.load_default()
+        cls._font_cache[size] = font
+        return font
+
+    def _set_focus(self, focused: bool) -> None:
+        self._focused = focused
+        self._redraw()
 
     def _click(self) -> None:
         self._on = not self._on
+        self._animate()
         if self._cmd:
             self._cmd(self._on)
-        self._animate()
+
+    @property
+    def on(self) -> bool:
+        return self._on
 
     def set_state(self, on: bool) -> None:
         if self._on != on:
             self._on = on
             self._animate()
 
-    def configure_bg(self, bg: str) -> None:
+    def set_colors(self, bg: str, on: str, off: str, focus: str) -> None:
         self.config(bg=bg)
+        self._colors = {'on': on, 'off': off, 'focus': focus}
         self._redraw()
 
     def _animate(self) -> None:
@@ -150,44 +193,43 @@ class _Toggle(tk.Canvas):
         return tuple(int(a + (b - a) * t) for a, b in zip(c0, c1))
 
     def _redraw(self) -> None:
-        s = self.S
-        W, H, R = self.W * s, self.H * s, self.R * s
+        s, sc = self.S, self._scale
+        M = self.M * s
+        W, H = self.W * s, self.H * s
+        R = H // 2
         t = self._pos
-        img = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+        img = Image.new('RGBA', (W + 2 * M, H + 2 * M), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
 
-        bg = self._mix(self.OFF_BG, self.ON_BG, t) + (255,)
-        edge = self._mix(self.OFF_E, self.ON_E, t) + (255,)
+        if self._focused:
+            ring = max(1, round(2 * sc)) * s
+            d.rounded_rectangle([0, 0, W + 2 * M - 1, H + 2 * M - 1],
+                                radius=R + M, outline=_rgb(self._colors['focus']) + (255,),
+                                width=ring)
 
-        d.rounded_rectangle([0, 0, W - 1, H - 1], radius=R, fill=bg)
-        d.rounded_rectangle([s, s, W - 1 - s, H - 1 - s],
-                            radius=R - s, outline=edge, width=s)
+        bg = self._mix(_rgb(self._colors['off']), _rgb(self._colors['on']), t) + (255,)
+        d.rounded_rectangle([M, M, M + W - 1, M + H - 1], radius=R, fill=bg)
 
-        kx = R + t * (W - 2 * R)
-        ky = H / 2
-        kr = R - 6 * s
-
-        d.ellipse([kx - kr, ky - kr + 3 * s,
-                   kx + kr, ky + kr + 5 * s],
-                  fill=(0, 0, 0, 90))
-        d.ellipse([kx - kr, ky - kr, kx + kr, ky + kr],
-                  fill=(255, 255, 255, 255),
-                  outline=(200, 200, 200, 255), width=s)
-        d.arc([kx - kr + 4 * s, ky - kr + 4 * s,
-               kx + kr - 4 * s, ky + kr - 4 * s],
-              200, 320, fill=(255, 255, 255, 220), width=2 * s)
+        pad = round(6 * sc) * s
+        kr = R - pad
+        kx = M + R + t * (W - 2 * R)
+        ky = M + H / 2
+        shadow = max(1, round(2 * sc)) * s
+        d.ellipse([kx - kr, ky - kr + shadow, kx + kr, ky + kr + shadow],
+                  fill=(0, 0, 0, 60))
+        d.ellipse([kx - kr, ky - kr, kx + kr, ky + kr], fill=(255, 255, 255, 255))
 
         text = 'ON' if t > 0.5 else 'OFF'
-        tx = R + (W - 2 * R) * (0.25 if t > 0.5 else 0.75)
-        ty = H / 2
-        font = self._font()
-        d.text((tx, ty + s), text, font=font, anchor='mm',
-               fill=(26, 74, 31, 255) if t > 0.5 else (85, 85, 85, 255))
-        d.text((tx, ty), text, font=font, anchor='mm',
-               fill=(255, 255, 255, 255))
+        # 文字はつまみと反対側の、つまみを除いた領域の中央に置く
+        if t > 0.5:
+            tx = M + (W - 2 * kr - pad) / 2
+        else:
+            tx = M + W - (W - 2 * kr - pad) / 2
+        font = self._font(round(18 * sc) * s)
+        d.text((tx, ky), text, font=font, anchor='mm', fill=(255, 255, 255, 255))
 
-        img = img.resize((self.W, self.H), Image.LANCZOS)
-        self._photo = ImageTk.PhotoImage(img)
+        img = img.resize((self.W + 2 * self.M, self.H + 2 * self.M), Image.LANCZOS)
+        self._photo = ImageTk.PhotoImage(img, master=self)
         self.delete('all')
         self.create_image(0, 0, anchor='nw', image=self._photo)
 
@@ -203,547 +245,959 @@ class App(tk.Tk):
                 pass
         return 96
 
-    def __init__(self) -> None:
+    def __init__(self, show_event=None) -> None:
         super().__init__()
+        # 「起動時はトレイに格納する」でもウィンドウが一瞬出ないよう、組み立て前に隠す
+        self.withdraw()
+
         dpi = self._get_system_dpi()
         self.tk.call('tk', 'scaling', dpi / 72.0)
         self._scale = dpi / 96.0
-        self.title(f"I'm fine  v{VERSION}")
+        self._ff = _pick_font_family(self)
+        self.title(APP_NAME)
         self.resizable(False, False)
         try:
             self.iconbitmap(_res('icon.ico'))
-            img = tk.PhotoImage(file=_res('icon.png'))
+        except Exception:
+            pass
+        try:
+            img = tk.PhotoImage(file=_res('icon.png'), master=self)
             self.iconphoto(True, img)
             self._icon_img = img
         except Exception:
             pass
 
+        self._closing = False
         self._loading = False
-        self._cfg = settings.load()
-        self._dark = self._cfg.get('theme', 'light') == 'dark'
-        self._tray_icon = None
+        self._modal = 0                       # 表示中のダイアログの数 (更新の適用を待つため)
+        self._cmds: queue.Queue = queue.Queue()  # 別スレッドからの命令 (トレイ・更新)
+        self._show_event = show_event
         self._going_to_tray = False
-        self._stop_triggered = False
-        self._stop_target: datetime.datetime | None = None
+        self._themed: list = []               # (ウィジェット, 役割) テーマを当てる対象
+        self._settings_win: tk.Toplevel | None = None
+        self._update_btn: tk.Button | None = None
+        self._update_lbl: tk.Label | None = None
+
+        self._ctrl = Controller()
         self._start_time: datetime.datetime | None = None
-        self._time_invalid = False
-        self._update_pending = False
-        self._update_state: str | None = None
-        self._update_status_override: str | None = None
-        self._tray_minimize: tk.BooleanVar
+        self._stop_target: datetime.datetime | None = None
+        self._auto_stopped_at: datetime.datetime | None = None
 
-        # 更新適用直前に記録された ON 状態を、起動時に一度だけ復元するためのフラグ。
-        # 復元するかどうかに関わらず、フラグの立ちっぱなしを防ぐため必ずクリアする。
-        self._resume_after_update = bool(self._cfg.get('resume_after_update'))
-        if self._cfg.get('resume_after_update'):
-            self._cfg = settings.update(resume_after_update=False)
-
-        # 更新適用直前にトレイへ格納されていたかを、起動時に一度だけ復元するためのフラグ。
-        # こちらも立ちっぱなしを防ぐため、読んだら即クリアする。
-        self._resume_in_tray = bool(self._cfg.get('resume_in_tray'))
-        if self._cfg.get('resume_in_tray'):
-            self._cfg = settings.update(resume_in_tray=False)
-
-        # 次に定期更新確認を行う時刻 (epoch 秒)。_check_for_updates が更新する。
+        # 更新の状態
+        self._update_busy = False
+        self._update_manual = False           # 手動で確認したか (結果を知らせる)
+        self._update_from_tray = False        # トレイから手動で確認したか (結果を通知する)
+        self._update_note: str | None = None  # メイン画面の補足行に出す更新の状態
+        self._update_label_text = ''          # 設定ウィンドウの「今すぐ確認」の横に出す文言
+        self._update_ready: dict | None = None  # ダウンロード・検証済みで適用を待っている更新
         self._next_update_check = time.time() + updater.RUNTIME_CHECK_INTERVAL_SEC
 
-        self._tw: dict[str, list] = {
-            'bg_frames': [],
-            'labels':    [],
-            'muted':     [],
-            'spinboxes': [],
-            'borders':   [],
-            'btns':      [],
-            'checks':    [],
-            'radios':    [],
+        self._cfg = settings.load()
+        self._theme_choice = self._cfg.get('theme', 'system')
+        self._dark = theme.resolve_dark(self._theme_choice)
+        self._last_theme_poll = time.monotonic()
+
+        # 更新して再起動した直後の引き継ぎ。フラグの立ちっぱなしを防ぐため、読んだら必ず消す。
+        cfg = self._cfg
+        just_updated = bool(cfg.get('just_updated'))
+        resume = {
+            'running': bool(cfg.get('resume_after_update')),
+            'in_tray': bool(cfg.get('resume_in_tray')),
+            'stop_target': cfg.get('resume_stop_target'),
+            'start_time': cfg.get('resume_start_time'),
         }
-        self._settings_win: tk.Toplevel | None = None
-        self._settings_tw: dict[str, list] = {
-            'bg_frames': [],
-            'labels':    [],
-            'muted':     [],
-            'spinboxes': [],
-            'borders':   [],
-            'btns':      [],
-            'checks':    [],
-            'radios':    [],
-        }
+        if (just_updated or resume['running'] or resume['in_tray']
+                or resume['stop_target'] or resume['start_time']):
+            self._cfg = settings.update(
+                just_updated=False, resume_after_update=False, resume_in_tray=False,
+                resume_stop_target=None, resume_start_time=None)
 
         self._build()
-        self._apply_theme()
-
         self._loading = True
         self._load_settings()
         self._loading = False
+        self._apply_theme()
 
         self.update_idletasks()
-        self.geometry(f'{int(260 * self._scale)}x{self.winfo_reqheight()}')
+        width = max(self._px(MAIN_WIDTH), self.winfo_reqwidth())
+        self.geometry(f'{width}x{self.winfo_reqheight()}')
         self._restore_position()
-
-        self._ctrl = Controller()
 
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         self.bind('<Unmap>', self._on_unmap)
-        self.after(1000, self._check_stop_timer)
 
-        if self._cfg.get('auto_on') or self._resume_after_update:
-            self.after(300, self._on_start)
+        # トレイアイコンは起動から終了まで出したままにする
+        self._tray = tray.Tray(self._post_tray, VERSION, _load_tray_image)
+        running, stop_label, title = self._tray_state()
+        tray_ok = self._tray.start(running, stop_label, title)
+        if not tray_ok:
+            applog.write('タスクトレイを使えないため、トレイに格納せずに動作する')
 
+        # 起動時に ON にするか
+        if just_updated or resume['running']:
+            if resume['running']:
+                decision = stoptimer.resume_decision(
+                    datetime.datetime.now(), resume['stop_target'], resume['start_time'])
+                if decision['start']:
+                    self._start(start_time=decision['start_time'],
+                                stop_target=decision['stop_target'])
+                else:
+                    # 再起動が停止時刻をまたいだ: その日の自動停止として扱う
+                    self._auto_stopped_at = decision['stopped_at']
+                    self._tray.notify(stoptimer.stopped_note(decision['stopped_at']))
+        elif self._cfg.get('auto_on'):
+            self._start()
+
+        # ウィンドウを出すか、トレイに格納したままにするか
+        in_tray = (self._cfg.get('start_in_tray') or resume['in_tray']) and tray_ok
+        if in_tray:
+            self._show_tray_hint_once()
+        else:
+            self._show_window()
+
+        if just_updated:
+            self._tray.notify(f'v{VERSION} に更新しました')
+
+        self._refresh_view()
+        self.after(PUMP_MS, self._pump)
+        self.after(1000, self._tick)
         self.after(3000, self._check_for_updates)
 
-        # 「起動時にタスクトレイへ格納」が有効なら、レイアウト確定後に格納する。
-        if self._cfg.get('start_in_tray') or self._resume_in_tray:
-            self.update_idletasks()
-            self.after(200, self._minimize_to_tray)
+    # ── 共通 ─────────────────────────────────────────────────────────────
 
-    # ── layout ────────────────────────────────────────────────────────────
+    def _px(self, n: float) -> int:
+        """96 DPI のときの px を、今の DPI の px にする。"""
+        return round(n * self._scale)
+
+    def _font(self, size: int, bold: bool = False) -> tuple:
+        return (self._ff, size, 'bold') if bold else (self._ff, size)
+
+    def _t(self) -> dict:
+        return THEMES['dark' if self._dark else 'light']
+
+    def _running(self) -> bool:
+        return self._ctrl.state == Controller.RUNNING
+
+    def report_callback_exception(self, exc, val, tb) -> None:
+        """Tk のコールバック内の想定外の例外を app.log に残す (落とさない)。"""
+        applog.log_exception(exc, val, tb, '画面の処理')
+
+    def _reg(self, widget: tk.Widget, role: str) -> tk.Widget:
+        self._themed.append((widget, role))
+        return widget
+
+    def _dialog(self, fn, *args, **kwargs):
+        """messagebox を出す。表示中は更新の適用を待つ。"""
+        self._modal += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            self._modal -= 1
+
+    def _button(self, parent, text: str, command, on_surface: bool = False) -> tk.Button:
+        """平らなボタン (背景色だけで、ホバーで色が変わる)。"""
+        b = tk.Button(parent, text=text, command=command,
+                      font=self._font(FONT_SMALL), relief='flat', bd=0,
+                      padx=self._px(12), pady=self._px(4), cursor='hand2',
+                      highlightthickness=1, takefocus=1)
+        b._on_surface = on_surface
+
+        def enter(_):
+            if str(b['state']) != 'disabled':
+                b.configure(bg=self._t()['BTN_HOVER'])
+
+        def leave(_):
+            b.configure(bg=self._t()['BTN_BG'])
+
+        b.bind('<Enter>', enter)
+        b.bind('<Leave>', leave)
+        return self._reg(b, 'button')
+
+    # ── 画面の組み立て ────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        self._init_option_vars()
-        self._build_header()
-        self._build_stop_timer()
-        self._build_separator()
-        self._build_controls()
+        self._init_vars()
+        px = self._px
+        outer = self._reg(tk.Frame(self), 'bg')
+        outer.pack(fill='both', expand=True, padx=px(16), pady=px(16))
 
-    def _build_header(self) -> None:
-        f = tk.Frame(self)
-        f.pack(fill='x', padx=12, pady=(6, 2))
-        self._tw['bg_frames'].append(f)
-
-        lbl = tk.Label(f, text='停止時刻', font=('Helvetica', FONT_SM))
-        lbl.pack(side='left')
-        self._tw['muted'].append(lbl)
-
-        self._settings_btn = tk.Button(
-            f, text='設定',
-            font=('Helvetica', FONT_SM),
-            relief='solid', bd=1, padx=8, pady=2,
-            cursor='hand2', command=self._open_settings,
-            highlightthickness=0,
-        )
-        self._settings_btn.pack(side='right')
-        self._tw['btns'].append(self._settings_btn)
-
-    def _build_stop_timer(self) -> None:
-        outer = tk.Frame(self)
-        outer.pack(fill='x', padx=12, pady=2)
-        self._tw['bg_frames'].append(outer)
-
-        self._stop_timer_enabled = tk.BooleanVar(value=False)
-        cb = tk.Checkbutton(
-            outer, variable=self._stop_timer_enabled,
-            text='有効', font=('Helvetica', FONT_MD),
-            highlightthickness=0,
-        )
-        cb.pack(side='left')
-        self._tw['checks'].append(cb)
-
-        self._stop_hour = tk.StringVar(value='17')
-        self._stop_min  = tk.StringVar(value='00')
-
-        self._stop_hour_sp = tk.Spinbox(
-            outer, from_=0, to=23, increment=1,
-            textvariable=self._stop_hour, width=4,
-            relief='solid', bd=1, font=('Helvetica', FONT_MD),
-            highlightthickness=0,
-        )
-        self._stop_hour_sp.pack(side='left', padx=(8, 2))
-        self._tw['spinboxes'].append(self._stop_hour_sp)
-
-        colon = tk.Label(outer, text=':', font=('Helvetica', FONT_MD))
-        colon.pack(side='left')
-        self._tw['labels'].append(colon)
-
-        self._stop_min_sp = tk.Spinbox(
-            outer, from_=0, to=59, increment=1,
-            textvariable=self._stop_min, width=4,
-            relief='solid', bd=1, font=('Helvetica', FONT_MD),
-            highlightthickness=0,
-        )
-        self._stop_min_sp.pack(side='left', padx=(2, 0))
-        self._tw['spinboxes'].append(self._stop_min_sp)
-
-        self._stop_hour.trace_add(
-            'write', lambda *_: self._fmt_time_and_save(self._stop_hour, 23))
-        self._stop_min.trace_add(
-            'write', lambda *_: self._fmt_time_and_save(self._stop_min, 59))
-        self._stop_timer_enabled.trace_add('write', lambda *_: self._save_if_valid())
-
-    def _build_separator(self) -> None:
-        sep = tk.Frame(self, height=1)
-        sep.pack(fill='x', padx=12, pady=(4, 4))
-        self._tw['borders'].append(sep)
-
-    def _build_controls(self) -> None:
-        f = tk.Frame(self)
-        f.pack(pady=(4, 0))
-        self._tw['bg_frames'].append(f)
-        self._toggle_sw = _Toggle(f, command=self._on_toggle, scale=self._scale)
+        self._toggle_sw = _Toggle(outer, command=self._on_toggle, scale=self._scale)
         self._toggle_sw.pack()
-        # 動作状態はこのアプリの最重要情報のため、視認性の低い muted 色ではなく
-        # 通常の TEXT 色を使うグループに入れる。
-        # 文言が伸びてもウィンドウ幅からはみ出さないよう折り返し、
-        # 折り返しで行数が変わってもウィンドウ高さがずれないよう
-        # 高さを常に2行分に固定する。
-        self._status_lbl = tk.Label(
-            f, text='停止中', font=('Helvetica', FONT_MD),
-            wraplength=int(230 * self._scale), justify='center',
-            height=2,
-        )
-        self._status_lbl.pack(pady=(4, 8))
-        self._tw['labels'].append(self._status_lbl)
+        self._reg(self._toggle_sw, 'toggle')
 
-    def _init_option_vars(self) -> None:
-        """設定ウィンドウで使う BooleanVar 類をメイン画面の構築時に用意する。
+        # 状態 (ON/OFF と経過時間)
+        self._state_lbl = self._reg(
+            tk.Label(outer, text='OFF', font=self._font(FONT_STATUS, bold=True)), 'state')
+        self._state_lbl.pack(pady=(px(8), 0))
 
-        変数自体はウィンドウの開閉と無関係に生き続ける必要があるため、
-        設定ウィンドウを開くたびに作り直すのではなくここで一度だけ作る。
-        """
-        self._tray_minimize = tk.BooleanVar(value=True)
-        self._auto_on = tk.BooleanVar(value=False)
+        # 補足 (いつ自動で OFF にするか、など)。文言が変わっても高さがずれないよう1行に固定する
+        self._note_lbl = self._reg(
+            tk.Label(outer, text='', font=self._font(FONT_SMALL),
+                     wraplength=px(MAIN_WIDTH - 32), justify='center'), 'muted_bg')
+        self._note_lbl.pack(pady=(px(2), 0))
+
+        # 停止時刻のカード
+        card = self._reg(tk.Frame(outer, highlightthickness=1, bd=0), 'card')
+        card.pack(fill='x', pady=(px(12), 0))
+        inner = self._reg(tk.Frame(card), 'surface')
+        inner.pack(fill='x', padx=px(12), pady=px(10))
+
+        cb = self._reg(tk.Checkbutton(
+            inner, variable=self._stop_timer_enabled,
+            text='決まった時刻に自動で OFF にする', font=self._font(FONT_BODY),
+            command=self._on_timer_toggle, anchor='w', highlightthickness=1,
+            takefocus=1), 'check')
+        cb.pack(fill='x')
+
+        row = self._reg(tk.Frame(inner), 'surface')
+        row.pack(anchor='w', padx=(px(24), 0), pady=(px(6), 0))
+        vcmd = (self.register(stoptimer.is_time_input_allowed), '%P')
+        self._stop_hour_sp = self._time_spinbox(row, self._stop_hour, 23, vcmd)
+        self._stop_hour_sp.pack(side='left')
+        colon = self._reg(tk.Label(row, text=':', font=self._font(FONT_BODY)), 'text_surface')
+        colon.pack(side='left', padx=px(4))
+        self._stop_min_sp = self._time_spinbox(row, self._stop_min, 59, vcmd)
+        self._stop_min_sp.pack(side='left')
+
+        # 下の段: バージョン (左) と設定ボタン (右)
+        bottom = self._reg(tk.Frame(outer), 'bg')
+        bottom.pack(fill='x', pady=(px(12), 0))
+        ver = self._reg(tk.Label(bottom, text=f'v{VERSION}', font=self._font(FONT_SMALL)),
+                        'muted_bg')
+        ver.pack(side='left', anchor='s')
+        self._settings_btn = self._button(bottom, '設定', self._open_settings)
+        self._settings_btn.pack(side='right')
+
+    def _time_spinbox(self, parent, var: tk.StringVar, maxval: int, vcmd) -> tk.Spinbox:
+        sp = tk.Spinbox(
+            parent, from_=0, to=maxval, increment=1, wrap=True, format='%02.0f',
+            textvariable=var, width=3, justify='center',
+            font=self._font(FONT_BODY), relief='flat', bd=0,
+            highlightthickness=1, validate='key', validatecommand=vcmd,
+            command=self._commit_time)
+        sp._invalid = False
+        # 入力中は整形しない。確定 (フォーカスが外れた・Enter) で丸めて2桁にして保存する
+        sp.bind('<FocusOut>', lambda _: self._commit_time())
+        sp.bind('<Return>', lambda _: self._commit_time())
+        return self._reg(sp, 'spin')
+
+    def _init_vars(self) -> None:
+        """画面と設定ウィンドウで使う変数。ウィンドウの開閉と関係なく生き続ける。"""
+        self._stop_timer_enabled = tk.BooleanVar(value=False)
+        self._stop_hour = tk.StringVar(value='17')
+        self._stop_min = tk.StringVar(value='00')
+        self._stop_hour.trace_add('write', lambda *_: self._on_time_edit())
+        self._stop_min.trace_add('write', lambda *_: self._on_time_edit())
         self._startup = tk.BooleanVar(value=False)
+        self._auto_on = tk.BooleanVar(value=False)
         self._start_in_tray = tk.BooleanVar(value=False)
+        self._minimize_to_tray = tk.BooleanVar(value=True)
+        self._close_to_tray = tk.BooleanVar(value=True)
+        self._notify_toggle = tk.BooleanVar(value=False)
         self._auto_update_enabled = tk.BooleanVar(value=True)
+        self._theme_var = tk.StringVar(value='system')
 
-    # ── settings window ──────────────────────────────────────────────────
+    # ── 設定ウィンドウ ────────────────────────────────────────────────────
 
     def _open_settings(self) -> None:
+        if self._closing:
+            return
         if self._settings_win is not None and self._settings_win.winfo_exists():
-            self._settings_win.lift()
-            self._settings_win.focus_force()
+            win = self._settings_win
+            win.deiconify()
+            win.lift()
+            win.focus_force()
             return
 
         win = tk.Toplevel(self)
+        win.withdraw()
         self._settings_win = win
         win.title('設定')
         win.resizable(False, False)
-        win.transient(self)
+        # メインが隠れている (トレイから開いた) ときに transient にすると、
+        # 設定ウィンドウまで表示されなくなるため、メインが見えているときだけにする
+        if self._main_visible():
+            win.transient(self)
         try:
             win.iconbitmap(_res('icon.ico'))
         except Exception:
             pass
 
-        self._settings_tw = {
-            'bg_frames': [], 'labels': [], 'muted': [], 'spinboxes': [],
-            'borders': [], 'btns': [], 'checks': [], 'radios': [],
-        }
-        self._theme_var = tk.StringVar(value='dark' if self._dark else 'light')
-
         self._build_settings_content(win)
-
-        win.update_idletasks()
-        x = self.winfo_x() + self.winfo_width() + 10
-        y = self.winfo_y()
-        win.geometry(f'+{x}+{y}')
-
         win.protocol('WM_DELETE_WINDOW', self._close_settings_window)
+        win.bind('<Escape>', lambda _: self._close_settings_window())
         self._apply_theme()
+        self._place_settings(win)
+        win.deiconify()
+        self._apply_titlebar(win)
         win.lift()
         win.focus_force()
 
     def _build_settings_content(self, win: tk.Toplevel) -> None:
-        tw = self._settings_tw
+        px = self._px
+        outer = self._reg(tk.Frame(win), 'bg')
+        outer.pack(fill='both', expand=True, padx=px(16), pady=px(16))
 
-        def heading(parent: tk.Widget, text: str) -> None:
-            lbl = tk.Label(parent, text=text, font=('Helvetica', FONT_SM))
-            lbl.pack(anchor='w', pady=(0, 2))
-            tw['muted'].append(lbl)
+        def section(title: str, first: bool = False) -> tk.Frame:
+            h = self._reg(tk.Label(outer, text=title, font=self._font(FONT_HEADING, bold=True)),
+                          'heading')
+            h.pack(anchor='w', pady=(0 if first else px(12), px(4)))
+            card = self._reg(tk.Frame(outer, highlightthickness=1, bd=0), 'card')
+            card.pack(fill='x')
+            inner = self._reg(tk.Frame(card), 'surface')
+            inner.pack(fill='x', padx=px(12), pady=px(8))
+            return inner
 
-        def separator(parent: tk.Widget) -> None:
-            sep = tk.Frame(parent, height=1)
-            sep.pack(fill='x', pady=(8, 8))
-            tw['borders'].append(sep)
+        def check(parent, var, text, cmd, enabled=True) -> tk.Checkbutton:
+            cb = self._reg(tk.Checkbutton(
+                parent, variable=var, text=text, font=self._font(FONT_BODY),
+                command=cmd, anchor='w', highlightthickness=1, takefocus=1), 'check')
+            if not enabled:
+                cb.configure(state='disabled')
+            cb.pack(fill='x', pady=px(2))
+            return cb
 
-        def checkbox(parent: tk.Widget, var: tk.BooleanVar, text: str, cmd) -> None:
-            cb = tk.Checkbutton(
-                parent, variable=var, text=text,
-                font=('Helvetica', FONT_MD), command=cmd,
-                highlightthickness=0,
-            )
-            cb.pack(anchor='w')
-            tw['checks'].append(cb)
+        s = section('起動', first=True)
+        check(s, self._startup, f'Windows の起動時に {APP_NAME} を起動する',
+              self._on_startup_toggle, enabled=(sys.platform == 'win32'))
+        check(s, self._auto_on, f'{APP_NAME} の起動時に自動で ON にする', self._save)
+        check(s, self._start_in_tray, '起動時はウィンドウを出さずタスクトレイに格納する', self._save)
 
-        outer = tk.Frame(win)
-        outer.pack(fill='both', expand=True, padx=14, pady=12)
-        tw['bg_frames'].append(outer)
+        s = section('タスクトレイ')
+        check(s, self._minimize_to_tray, '最小化したらタスクトレイに格納する', self._save)
+        check(s, self._close_to_tray, '閉じる（×）でタスクトレイに格納する', self._save)
+        check(s, self._notify_toggle, 'ON/OFF を切り替えたとき通知する', self._save)
 
-        # テーマ
-        heading(outer, 'テーマ')
-        theme_row = tk.Frame(outer)
-        theme_row.pack(fill='x')
-        tw['bg_frames'].append(theme_row)
-        for value, text in (('light', 'ライト'), ('dark', 'ダーク')):
-            rb = tk.Radiobutton(
-                theme_row, variable=self._theme_var, value=value, text=text,
-                font=('Helvetica', FONT_MD),
-                command=lambda: self._apply_theme_choice(self._theme_var.get()),
-                highlightthickness=0,
-            )
-            rb.pack(side='left', padx=(0, 12))
-            tw['radios'].append(rb)
+        s = section('表示')
+        row = self._reg(tk.Frame(s), 'surface')
+        row.pack(fill='x', pady=px(2))
+        lbl = self._reg(tk.Label(row, text='テーマ', font=self._font(FONT_BODY)), 'text_surface')
+        lbl.pack(side='left', padx=(0, px(12)))
+        for value, text in (('system', 'Windows に合わせる'), ('light', 'ライト'), ('dark', 'ダーク')):
+            rb = self._reg(tk.Radiobutton(
+                row, variable=self._theme_var, value=value, text=text,
+                font=self._font(FONT_BODY), highlightthickness=1, takefocus=1,
+                command=lambda: self._set_theme_choice(self._theme_var.get())), 'radio')
+            rb.pack(side='left', padx=(0, px(8)))
 
-        separator(outer)
+        s = section('更新')
+        check(s, self._auto_update_enabled, '自動で更新する', self._save)
+        row = self._reg(tk.Frame(s), 'surface')
+        row.pack(fill='x', pady=(px(6), px(2)))
+        self._update_btn = self._button(row, '今すぐ確認',
+                                        lambda: self._check_for_updates(force=True),
+                                        on_surface=True)
+        self._update_btn.pack(side='left')
+        self._update_lbl = self._reg(
+            tk.Label(row, text=self._update_label_text, font=self._font(FONT_SMALL),
+                     anchor='w'), 'muted_surface')
+        self._update_lbl.pack(side='left', padx=(px(8), 0), fill='x', expand=True)
 
-        # 起動と常駐
-        heading(outer, '起動と常駐')
-        for var, text, cmd in (
-            (self._tray_minimize, '最小化でタスクトレイ格納', self._save_if_valid),
-            (self._start_in_tray, '起動時にタスクトレイへ格納', self._save_if_valid),
-            (self._auto_on, '起動時に自動でON', self._save_if_valid),
-            (self._startup, 'Windows起動時に起動', self._on_startup_toggle),
-        ):
-            checkbox(outer, var, text, cmd)
+        sep = self._reg(tk.Frame(outer, height=1), 'sep')
+        sep.pack(fill='x', pady=(px(16), px(12)))
 
-        separator(outer)
+        ver = self._reg(tk.Label(outer, text=f'{APP_NAME}  v{VERSION}',
+                                 font=self._font(FONT_SMALL)), 'muted_bg')
+        ver.pack(anchor='w')
 
-        # 更新
-        heading(outer, '更新')
-        checkbox(outer, self._auto_update_enabled, '自動アップデート', self._save_if_valid)
-        update_btn = tk.Button(
-            outer, text='今すぐ更新を確認',
-            font=('Helvetica', FONT_SM),
-            relief='solid', bd=1, padx=8, pady=2,
-            cursor='hand2', command=lambda: self._check_for_updates(force=True),
-            highlightthickness=0,
-        )
-        update_btn.pack(anchor='w', pady=(4, 0))
-        tw['btns'].append(update_btn)
+        buttons = self._reg(tk.Frame(outer), 'bg')
+        buttons.pack(fill='x', pady=(px(8), 0))
+        self._button(buttons, 'データフォルダを開く', self._open_data_dir).pack(side='left')
+        self._button(buttons, '更新の記録を開く', self._open_update_log).pack(
+            side='left', padx=(px(8), 0))
+        self._button(buttons, '閉じる', self._close_settings_window).pack(side='right')
 
-        separator(outer)
-
-        version_lbl = tk.Label(
-            outer, text=f'v{VERSION}', font=('Helvetica', FONT_SM))
-        version_lbl.pack(anchor='e')
-        tw['muted'].append(version_lbl)
+        self._refresh_update_controls()
 
     def _close_settings_window(self) -> None:
         win = self._settings_win
         if win is None:
             return
         self._settings_win = None
-        if win.winfo_exists():
-            win.destroy()
+        self._update_btn = None
+        self._update_lbl = None
+        try:
+            if win.winfo_exists():
+                win.destroy()
+        except tk.TclError:
+            pass
+        self._themed = [(w, r) for w, r in self._themed if self._alive(w)]
 
-    # ── theme ─────────────────────────────────────────────────────────────
+    def _place_settings(self, win: tk.Toplevel) -> None:
+        """メインの右に出す。画面からはみ出すならメインの左。どちらにしても画面内に収める。"""
+        win.update_idletasks()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        vx, vy, vw, vh = self._virtual_screen()
+        gap = self._px(12)
+        frame = self._px(16)  # 枠とタイトルバーのぶんの余裕
+        if self._main_visible():
+            mx, my = self.winfo_x(), self.winfo_y()
+            mw = self.winfo_width() + frame
+            x = mx + mw + gap
+            if x + w + frame > vx + vw:
+                x = mx - w - frame - gap
+            y = my
+        else:
+            x = vx + (vw - w) // 2
+            y = vy + (vh - h) // 2
+        x = max(vx, min(x, vx + vw - w - frame))
+        y = max(vy, min(y, vy + vh - h - frame * 3))
+        win.geometry(f'+{x}+{y}')
 
-    def _apply_theme(self) -> None:
-        t = THEMES['dark' if self._dark else 'light']
-        self.configure(bg=t['BG'])
-        self._apply_theme_group(self._tw, t)
-        if hasattr(self, '_toggle_sw'):
-            self._toggle_sw.configure_bg(t['BG'])
-        self._apply_titlebar_theme()
+    def _open_data_dir(self) -> None:
+        _open_path(str(settings.data_dir()))
 
-        if self._settings_win is not None and self._settings_win.winfo_exists():
-            self._settings_win.configure(bg=t['BG'])
-            self._apply_theme_group(self._settings_tw, t)
-            self._apply_settings_titlebar_theme()
+    def _open_update_log(self) -> None:
+        path = os.path.join(str(settings.data_dir()), 'update.log')
+        if not os.path.exists(path):
+            parent = self._settings_win if self._settings_win is not None else self
+            self._dialog(messagebox.showinfo, APP_NAME, 'まだ記録はありません', parent=parent)
+            return
+        _open_path(path)
+
+    # ── テーマ ────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _apply_theme_group(tw: dict, t: dict) -> None:
-        # 設定ウィンドウが閉じられた直後など、破棄済みウィジェットへの
-        # configure() で例外にならないよう、必ず winfo_exists() で確認する。
-        for w in tw['bg_frames']:
-            if w.winfo_exists(): w.configure(bg=t['BG'])
-        for w in tw['labels']:
-            if w.winfo_exists(): w.configure(bg=t['BG'], fg=t['TEXT'])
-        for w in tw['muted']:
-            if w.winfo_exists(): w.configure(bg=t['BG'], fg=t['MUTED'])
-        for w in tw['spinboxes']:
-            if not w.winfo_exists():
-                continue
-            # 入力が無効と判定されている間は警告色を維持し、テーマ切替で
-            # 元に戻ってしまわないようにする。
-            bg = t['WARN_BG'] if getattr(w, '_invalid', False) else t['ENTRY_BG']
-            w.configure(bg=bg, fg=t['TEXT'],
-                       buttonbackground=t['BTN_BG'],
-                       insertbackground=t['TEXT'],
-                       highlightbackground=t['BG'], highlightcolor=t['BG'])
-        for w in tw['borders']:
-            if w.winfo_exists(): w.configure(bg=t['BORDER'])
-        for w in tw['btns']:
-            if w.winfo_exists():
-                w.configure(bg=t['BTN_BG'], fg=t['TEXT'],
-                           activebackground=t['ENTRY_BG'],
-                           activeforeground=t['TEXT'],
-                           highlightbackground=t['BG'],
-                           highlightcolor=t['BG'])
-        for w in tw['checks']:
-            if w.winfo_exists():
-                w.configure(bg=t['BG'], fg=t['TEXT'],
-                           selectcolor=t['ENTRY_BG'],
-                           activebackground=t['BG'],
-                           activeforeground=t['TEXT'],
-                           highlightbackground=t['BG'],
-                           highlightcolor=t['BG'])
-        for w in tw['radios']:
-            if w.winfo_exists():
-                w.configure(bg=t['BG'], fg=t['TEXT'],
-                           selectcolor=t['ENTRY_BG'],
-                           activebackground=t['BG'],
-                           activeforeground=t['TEXT'],
-                           highlightbackground=t['BG'],
-                           highlightcolor=t['BG'])
-
-    def _apply_titlebar_theme(self) -> None:
-        if sys.platform != 'win32':
-            return
-        t = THEMES['dark' if self._dark else 'light']
+    def _alive(w) -> bool:
         try:
-            import ctypes
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
-        except Exception:
-            return
-        TitleBarThemeHelper.apply(
-            hwnd, self._dark, t['CAPTION'], t['CAPTION_TEXT'])
+            return bool(w.winfo_exists())
+        except tk.TclError:
+            return False
 
-    def _apply_settings_titlebar_theme(self) -> None:
-        if sys.platform != 'win32':
+    def _apply_theme(self) -> None:
+        t = self._t()
+        self.configure(bg=t['BG'])
+        if self._settings_win is not None and self._alive(self._settings_win):
+            self._settings_win.configure(bg=t['BG'])
+        for w, role in self._themed:
+            if self._alive(w):
+                try:
+                    self._style(w, role, t)
+                except tk.TclError:
+                    pass
+        self._style_state_label()
+        self._apply_titlebar(self)
+        if self._settings_win is not None:
+            self._apply_titlebar(self._settings_win)
+
+    def _style(self, w, role: str, t: dict) -> None:
+        if role == 'bg':
+            w.configure(bg=t['BG'])
+        elif role == 'surface':
+            w.configure(bg=t['SURFACE'])
+        elif role == 'card':
+            w.configure(bg=t['SURFACE'], highlightbackground=t['BORDER'],
+                        highlightcolor=t['BORDER'])
+        elif role == 'sep':
+            w.configure(bg=t['BORDER'])
+        elif role == 'heading':
+            w.configure(bg=t['BG'], fg=t['MUTED'])
+        elif role == 'muted_bg':
+            w.configure(bg=t['BG'], fg=t['MUTED'])
+        elif role == 'text_surface':
+            w.configure(bg=t['SURFACE'], fg=t['TEXT'])
+        elif role == 'muted_surface':
+            w.configure(bg=t['SURFACE'], fg=t['MUTED'])
+        elif role == 'state':
+            w.configure(bg=t['BG'])
+        elif role in ('check', 'radio'):
+            w.configure(bg=t['SURFACE'], fg=t['TEXT'], selectcolor=t['ENTRY_BG'],
+                        activebackground=t['SURFACE'], activeforeground=t['TEXT'],
+                        disabledforeground=t['DISABLED'],
+                        highlightbackground=t['SURFACE'], highlightcolor=t['FOCUS'])
+        elif role == 'button':
+            parent_bg = t['SURFACE'] if getattr(w, '_on_surface', False) else t['BG']
+            w.configure(bg=t['BTN_BG'], fg=t['TEXT'], activebackground=t['BTN_HOVER'],
+                        activeforeground=t['TEXT'], disabledforeground=t['DISABLED'],
+                        highlightbackground=parent_bg, highlightcolor=t['FOCUS'])
+        elif role == 'spin':
+            bg = t['WARN_BG'] if getattr(w, '_invalid', False) else t['ENTRY_BG']
+            w.configure(bg=bg, fg=t['TEXT'], buttonbackground=t['BTN_BG'],
+                        insertbackground=t['TEXT'], disabledbackground=t['SURFACE'],
+                        disabledforeground=t['DISABLED'], readonlybackground=t['SURFACE'],
+                        highlightbackground=t['BORDER'], highlightcolor=t['ACCENT'],
+                        selectbackground=t['TOGGLE_ON'], selectforeground='#FFFFFF')
+        elif role == 'toggle':
+            w.set_colors(t['BG'], t['TOGGLE_ON'], t['TOGGLE_OFF'], t['FOCUS'])
+
+    def _style_state_label(self) -> None:
+        t = self._t()
+        self._state_lbl.configure(fg=t['ACCENT'] if self._running() else t['MUTED'])
+
+    def _apply_titlebar(self, win) -> None:
+        if sys.platform != 'win32' or win is None:
             return
-        win = self._settings_win
-        if win is None or not win.winfo_exists():
-            return
-        t = THEMES['dark' if self._dark else 'light']
+        t = self._t()
         try:
             import ctypes
             hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
         except Exception:
             return
-        TitleBarThemeHelper.apply(
-            hwnd, self._dark, t['CAPTION'], t['CAPTION_TEXT'])
+        TitleBarThemeHelper.apply(hwnd, self._dark, t['CAPTION'], t['CAPTION_TEXT'])
 
-    def _apply_theme_choice(self, choice: str) -> None:
-        """設定ウィンドウのラジオボタンから、指定されたテーマを適用する。"""
-        self._dark = (choice == 'dark')
+    def _set_theme_choice(self, choice: str) -> None:
+        if choice not in theme.THEME_CHOICES:
+            choice = 'system'
+        self._theme_choice = choice
+        if self._theme_var.get() != choice:
+            self._theme_var.set(choice)
+        self._dark = theme.resolve_dark(choice)
         self._apply_theme()
-        # settings.update() は他のキーを一切壊さずに theme だけを更新する。
-        self._cfg = settings.update(theme='dark' if self._dark else 'light')
+        self._cfg = settings.update(theme=choice)
 
-    # ── logic ─────────────────────────────────────────────────────────────
+    def _poll_system_theme(self) -> None:
+        if self._theme_choice != 'system':
+            return
+        now = time.monotonic()
+        if now - self._last_theme_poll < SYSTEM_THEME_POLL_SEC:
+            return
+        self._last_theme_poll = now
+        dark = theme.system_prefers_dark()
+        if dark != self._dark:
+            self._dark = dark
+            self._apply_theme()
+
+    # ── 設定の読み書き ────────────────────────────────────────────────────
 
     def _load_settings(self) -> None:
         c = self._cfg
         self._stop_timer_enabled.set(bool(c.get('stop_timer_enabled', False)))
         self._stop_hour.set(f"{c.get('stop_hour', 17):02d}")
         self._stop_min.set(f"{c.get('stop_min', 0):02d}")
-        self._tray_minimize.set(bool(c.get('tray_minimize', True)))
+        self._minimize_to_tray.set(bool(c.get('minimize_to_tray', True)))
+        self._close_to_tray.set(bool(c.get('close_to_tray', True)))
+        self._notify_toggle.set(bool(c.get('notify_toggle', False)))
         self._auto_on.set(bool(c.get('auto_on', False)))
         self._start_in_tray.set(bool(c.get('start_in_tray', False)))
         self._auto_update_enabled.set(bool(c.get('auto_update_enabled', True)))
-        self._startup.set(self._startup_registered())
+        self._theme_var.set(self._theme_choice)
+        # 登録されていて exe の場所がずれていれば、今の場所で書き直す
+        self._startup.set(startup.sync())
+        self._update_time_fields_state()
 
-    def _get_cfg(self) -> dict | None:
-        """UIが管理する項目だけを現在値で上書きした設定全体を返す。
-
-        self._cfg のコピーをベースにすることで、update_check_url や
-        auto_update_enabled / resume_after_update / resume_in_tray のような UI 側で
-        持っていないキーを保存のたびに消してしまわないようにする。
-        """
-        try:
-            cfg = dict(self._cfg)
-            cfg.update({
-                'theme': 'dark' if self._dark else 'light',
-                'stop_timer_enabled': self._stop_timer_enabled.get(),
-                'stop_hour': int(self._stop_hour.get()),
-                'stop_min':  int(self._stop_min.get()),
-                'tray_minimize': self._tray_minimize.get(),
-                'auto_on': self._auto_on.get(),
-                'start_in_tray': self._start_in_tray.get(),
-                'auto_update_enabled': self._auto_update_enabled.get(),
-            })
-            return cfg
-        except (ValueError, AttributeError):
-            return None
-
-    def _save_if_valid(self) -> None:
-        if self._loading:
+    def _save(self) -> None:
+        """画面で扱う項目だけを保存する (ほかの項目は settings.update が残す)。"""
+        if self._loading or self._closing:
             return
-        self._check_time_validity()
-        cfg = self._get_cfg()
-        if cfg is not None:
-            settings.save(cfg)
-            self._cfg = cfg
-        self._refresh_stop_target()
-        self._update_status()
+        self._cfg = settings.update(
+            theme=self._theme_choice,
+            stop_timer_enabled=self._stop_timer_enabled.get(),
+            stop_hour=self._committed_hour(),
+            stop_min=self._committed_min(),
+            minimize_to_tray=self._minimize_to_tray.get(),
+            close_to_tray=self._close_to_tray.get(),
+            notify_toggle=self._notify_toggle.get(),
+            auto_on=self._auto_on.get(),
+            start_in_tray=self._start_in_tray.get(),
+            auto_update_enabled=self._auto_update_enabled.get(),
+        )
+        self._refresh_view()
 
-    def _fmt_time_and_save(self, var: tk.StringVar, maxval: int) -> None:
-        if self._loading:
+    # ── 停止時刻 ──────────────────────────────────────────────────────────
+
+    def _committed_hour(self) -> int:
+        return int(stoptimer.normalize_time_field(
+            self._stop_hour.get(), 23, self._cfg.get('stop_hour', 17)))
+
+    def _committed_min(self) -> int:
+        return int(stoptimer.normalize_time_field(
+            self._stop_min.get(), 59, self._cfg.get('stop_min', 0)))
+
+    def _time_invalid(self) -> bool:
+        return not (stoptimer.time_field_valid(self._stop_hour.get(), 23)
+                    and stoptimer.time_field_valid(self._stop_min.get(), 59))
+
+    def _on_time_edit(self) -> None:
+        """入力中: 整形も保存もせず、正しくない値の欄に色を付けるだけ。"""
+        for sp, var, maxval in ((getattr(self, '_stop_hour_sp', None), self._stop_hour, 23),
+                                (getattr(self, '_stop_min_sp', None), self._stop_min, 59)):
+            if sp is None:
+                continue
+            invalid = not stoptimer.time_field_valid(var.get(), maxval)
+            if sp._invalid != invalid:
+                sp._invalid = invalid
+                self._style(sp, 'spin', self._t())
+        if hasattr(self, '_note_lbl'):
+            self._refresh_view()
+
+    def _commit_time(self, *_):
+        """確定: 範囲内に丸めて2桁にし、保存する。"""
+        if self._loading or self._closing:
             return
+        h = f'{self._committed_hour():02d}'
+        m = f'{self._committed_min():02d}'
+        if self._stop_hour.get() != h:
+            self._stop_hour.set(h)
+        if self._stop_min.get() != m:
+            self._stop_min.set(m)
+        changed = (int(h) != self._cfg.get('stop_hour') or int(m) != self._cfg.get('stop_min'))
+        if changed and self._running():
+            self._stop_target = self._calc_stop_target()
+        if changed:
+            self._save()
+
+    def _on_timer_toggle(self) -> None:
+        self._update_time_fields_state()
+        if self._running():
+            self._commit_time()
+            self._stop_target = self._calc_stop_target()
+        self._save()
+
+    def _update_time_fields_state(self) -> None:
+        state = 'normal' if self._stop_timer_enabled.get() else 'disabled'
+        for sp in (self._stop_hour_sp, self._stop_min_sp):
+            sp.configure(state=state)
+
+    def _calc_stop_target(self) -> datetime.datetime:
+        return stoptimer.calc_stop_target(
+            datetime.datetime.now(), self._committed_hour(), self._committed_min())
+
+    def _timer_active(self) -> bool:
+        return bool(self._stop_timer_enabled.get())
+
+    # ── ON / OFF ──────────────────────────────────────────────────────────
+
+    def _on_toggle(self, on: bool) -> None:
+        if on:
+            self._start(notify=True)
+        else:
+            self._stop(notify=True)
+
+    def _start(self, start_time=None, stop_target=None, notify: bool = False) -> None:
+        if self._closing:
+            return
+        self._commit_time()
+        self._auto_stopped_at = None
+        self._start_time = start_time or datetime.datetime.now()
+        self._stop_target = stop_target or self._calc_stop_target()
+        if not self._running():
+            self._ctrl.start()
+        self._toggle_sw.set_state(True)
+        self._refresh_view()
+        if notify and self._notify_toggle.get():
+            self._tray.notify('ON にしました')
+
+    def _stop(self, auto: bool = False, notify: bool = False) -> None:
+        target = self._stop_target
+        self._ctrl.stop()
+        self._start_time = None
+        self._auto_stopped_at = target if auto else None
+        self._toggle_sw.set_state(False)
+        self._refresh_view()
+        if notify and self._notify_toggle.get():
+            self._tray.notify('OFF にしました')
+
+    def _toggle_running(self) -> None:
+        if self._running():
+            self._stop(notify=True)
+        else:
+            self._start(notify=True)
+
+    def _check_auto_stop(self) -> None:
+        if not (self._running() and self._timer_active() and self._stop_target is not None):
+            return
+        if datetime.datetime.now() >= self._stop_target:
+            target = self._stop_target
+            self._stop(auto=True)
+            # 自動停止は設定に関係なく通知する
+            self._tray.notify(stoptimer.stopped_note(target))
+
+    # ── 表示の更新 ────────────────────────────────────────────────────────
+
+    def _note_text(self, now: datetime.datetime) -> str:
+        if self._update_note:
+            return self._update_note
+        if self._timer_active() and self._time_invalid():
+            return '時刻は 0〜23 時、0〜59 分で入力してください'
+        if self._running():
+            if self._timer_active() and self._stop_target is not None:
+                return stoptimer.stop_note(self._stop_target, now)
+            return 'クリックで OFF にします'
+        if self._auto_stopped_at is not None:
+            return stoptimer.stopped_note(self._auto_stopped_at)
+        return 'クリックで ON にします'
+
+    def _tray_state(self) -> tuple:
+        running = self._running()
+        stop_label = None
+        if self._timer_active():
+            stop_label = stoptimer.tray_stop_label(
+                self._stop_target if running else None, datetime.datetime.now(),
+                self._committed_hour(), self._committed_min())
+        return running, stop_label, stoptimer.tray_title(running, stop_label)
+
+    def _refresh_view(self) -> None:
+        if self._closing or not hasattr(self, '_state_lbl'):
+            return
+        now = datetime.datetime.now()
+        if self._running():
+            text = 'ON'
+            if self._start_time is not None:
+                text += '  ' + stoptimer.format_elapsed((now - self._start_time).total_seconds())
+        else:
+            text = 'OFF'
+        if self._state_lbl.cget('text') != text:
+            self._state_lbl.configure(text=text)
+        self._style_state_label()
+        note = self._note_text(now)
+        if self._note_lbl.cget('text') != note:
+            self._note_lbl.configure(text=note)
+        if self._toggle_sw.on != self._running():
+            self._toggle_sw.set_state(self._running())
+        if hasattr(self, '_tray'):
+            self._tray.refresh(*self._tray_state())
+
+    # ── 定期処理 (メインスレッド) ─────────────────────────────────────────
+
+    def _pump(self) -> None:
+        """別スレッドから積まれた命令を、メインスレッドで実行する。"""
         try:
-            v = max(0, min(maxval, int(var.get())))
-            fmt = f'{v:02d}'
-            if var.get() != fmt:
-                # Tcl の variable trace は、trace 実行中に同じ変数へ書き込んでも
-                # 再入しない仕様のため、ここで set した後も自分で
-                # 保存・検証まで続けて行う必要がある。
-                var.set(fmt)
-        except ValueError:
+            if self._closing:
+                return
+            while True:
+                try:
+                    item = self._cmds.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    if item[0] == 'tray':
+                        self._handle_tray_command(item[1])
+                    elif item[0] == 'update':
+                        self._on_update_state(item[1], item[2])
+                except Exception:
+                    applog.log_exception(*sys.exc_info(), where=f'命令 {item!r}')
+                if self._closing:
+                    return
+            if instance.poll(self._show_event):
+                self._show_window()
+            self._tray.flush()
+            self._maybe_apply_update()
+        finally:
+            if not self._closing:
+                self.after(PUMP_MS, self._pump)
+
+    def _tick(self) -> None:
+        """1秒ごとの処理。例外が起きても必ず次を予約する。"""
+        try:
+            if self._closing:
+                return
+            self._check_auto_stop()
+            self._poll_system_theme()
+            # 起動中の定期的な更新確認。確認するたびに次の時刻が先送りされる。
+            if time.time() >= self._next_update_check:
+                self._check_for_updates()
+            self._refresh_view()
+        finally:
+            if not self._closing:
+                self.after(1000, self._tick)
+
+    # ── トレイ ────────────────────────────────────────────────────────────
+
+    def _post_tray(self, cmd: str) -> None:
+        # トレイのスレッドから呼ばれる。Tk には触らず、キューに積むだけ。
+        self._cmds.put(('tray', cmd))
+
+    def _handle_tray_command(self, cmd: str) -> None:
+        if cmd == tray.TOGGLE:
+            self._toggle_running()
+        elif cmd == tray.OPEN:
+            self._show_window()
+        elif cmd == tray.SETTINGS:
+            self._open_settings()
+        elif cmd == tray.CHECK_UPDATE:
+            self._check_for_updates(force=True, from_tray=True)
+        elif cmd == tray.OPEN_DATA:
+            self._open_data_dir()
+        elif cmd == tray.QUIT:
+            self._request_quit()
+
+    def _show_tray_hint_once(self) -> None:
+        if self._cfg.get('tray_hint_shown'):
+            return
+        self._tray.notify(TRAY_HINT)
+        self._cfg = settings.update(tray_hint_shown=True)
+
+    def _go_to_tray(self) -> bool:
+        """ウィンドウを隠してトレイだけにする。トレイが使えなければ False。"""
+        if not self._tray.available:
+            return False
+        # メインが隠れているのに設定ウィンドウだけ浮いている状態を避ける
+        self._close_settings_window()
+        self._save_position()
+        self._going_to_tray = True
+        try:
+            self.withdraw()
+        finally:
+            self._going_to_tray = False
+        self._show_tray_hint_once()
+        return True
+
+    def _main_visible(self) -> bool:
+        try:
+            return bool(self.winfo_viewable()) and self.wm_state() == 'normal'
+        except tk.TclError:
+            return False
+
+    def _show_window(self) -> None:
+        if self._closing:
+            return
+        self.deiconify()
+        try:
+            self.state('normal')
+        except tk.TclError:
             pass
-        self._save_if_valid()
-
-    # ── 入力検証 ──────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _time_field_valid(var: tk.StringVar, maxval: int) -> bool:
+        self.lift()
+        self._apply_titlebar(self)
         try:
-            return 0 <= int(var.get()) <= maxval
-        except ValueError:
-            return False
+            self.focus_force()
+        except tk.TclError:
+            pass
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                ctypes.windll.user32.SetForegroundWindow(
+                    ctypes.windll.user32.GetParent(self.winfo_id()))
+            except Exception:
+                pass
 
-    def _mark_spinbox_invalid(self, widget: tk.Spinbox, invalid: bool) -> None:
-        widget._invalid = invalid
-        t = THEMES['dark' if self._dark else 'light']
-        widget.configure(bg=t['WARN_BG'] if invalid else t['ENTRY_BG'])
+    # ── 更新 ──────────────────────────────────────────────────────────────
 
-    def _check_time_validity(self) -> None:
-        hour_ok = self._time_field_valid(self._stop_hour, 23)
-        min_ok = self._time_field_valid(self._stop_min, 59)
-        self._mark_spinbox_invalid(self._stop_hour_sp, not hour_ok)
-        self._mark_spinbox_invalid(self._stop_min_sp, not min_ok)
-        self._time_invalid = not (hour_ok and min_ok)
+    def _post_update_state(self, state: str, info: dict) -> None:
+        # 更新のスレッドから呼ばれる。Tk には触らず、キューに積むだけ。
+        self._cmds.put(('update', state, dict(info or {})))
 
-    # ── startup / position ────────────────────────────────────────────────
-
-    _RUN_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
-    _RUN_NAME = 'ImFine'
-
-    @classmethod
-    def _startup_registered(cls) -> bool:
-        if sys.platform != 'win32':
-            return False
-        import winreg
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, cls._RUN_KEY) as key:
-                winreg.QueryValueEx(key, cls._RUN_NAME)
-                return True
-        except OSError:
-            return False
-
-    def _on_startup_toggle(self) -> None:
-        if sys.platform != 'win32':
+    def _check_for_updates(self, force: bool = False, from_tray: bool = False) -> None:
+        # どの経路 (起動直後 / 定期 / 手動) から呼ばれても、ここから一定時間後を次回とする。
+        self._next_update_check = time.time() + updater.RUNTIME_CHECK_INTERVAL_SEC
+        if self._closing:
             return
-        import winreg
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self._RUN_KEY,
-                                0, winreg.KEY_SET_VALUE) as key:
-                if self._startup.get():
-                    if getattr(sys, 'frozen', False):
-                        cmd = f'"{sys.executable}"'
-                    else:
-                        cmd = (f'"{sys.executable}"'
-                               f' "{os.path.abspath(sys.argv[0])}"')
-                    winreg.SetValueEx(key, self._RUN_NAME, 0,
-                                      winreg.REG_SZ, cmd)
-                else:
-                    try:
-                        winreg.DeleteValue(key, self._RUN_NAME)
-                    except FileNotFoundError:
-                        pass
-        except OSError:
-            messagebox.showwarning(
-                "I'm fine", 'スタートアップ登録の変更に失敗しました。', parent=self)
-            self._startup.set(self._startup_registered())
-        self._save_if_valid()
+        if self._update_ready is not None:
+            return  # ダウンロード済みで適用を待っている
+        if not getattr(sys, 'frozen', False):
+            if force:
+                self._set_update_label('ソースから実行しているため、更新はしません')
+                if from_tray:
+                    self._tray.notify('ソースから実行しているため、更新はしません')
+            return
+        if not force and not self._auto_update_enabled.get():
+            return
+        if self._update_busy or updater.is_running():
+            return  # 実行中は何もしない (ボタンは無効になっている)
+        started = updater.check_and_apply_async(
+            VERSION, self._cfg.get('update_check_url'),
+            on_state=self._post_update_state, apply=False)
+        if started:
+            self._update_busy = True
+            self._update_manual = force
+            self._update_from_tray = from_tray
+            if force:
+                self._set_update_label('確認しています…')
+        self._refresh_update_controls()
+
+    def _set_update_label(self, text: str) -> None:
+        self._update_label_text = text
+        if self._update_lbl is not None and self._alive(self._update_lbl):
+            self._update_lbl.configure(text=text)
+
+    def _refresh_update_controls(self) -> None:
+        btn = self._update_btn
+        if btn is None or not self._alive(btn):
+            return
+        busy = self._update_busy or self._update_ready is not None
+        btn.configure(state='disabled' if busy else 'normal',
+                      cursor='arrow' if busy else 'hand2')
+        if busy:
+            btn.configure(bg=self._t()['BTN_BG'])
+
+    def _on_update_state(self, state: str, info: dict) -> None:
+        latest = info.get('latest') or ''
+        manual = self._update_manual
+        from_tray = self._update_from_tray
+        if state == 'checking':
+            if manual:
+                self._set_update_label('確認しています…')
+        elif state == 'up_to_date':
+            self._update_busy = False
+            self._update_note = None
+            text = f'最新版です（{latest or "v" + VERSION}）'
+            self._set_update_label(text)
+            if from_tray:
+                self._tray.notify(text)
+        elif state == 'downloading':
+            self._update_note = '更新をダウンロード中…'
+            self._set_update_label('新しい版をダウンロードしています…')
+            # 更新の通知は設定に関係なく出す
+            self._tray.notify(f'新しい版（{latest}）をダウンロードしています。'
+                              '終わると自動で再起動します')
+        elif state == 'ready':
+            self._update_busy = False
+            self._update_ready = {'path': info.get('path'), 'latest': latest}
+            self._update_note = '更新の準備ができました'
+            self._set_update_label('設定を閉じると更新して再起動します')
+        elif state == 'failed':
+            self._update_busy = False
+            self._update_note = None
+            self._set_update_label('確認できませんでした')
+            if from_tray:
+                self._tray.notify('更新を確認できませんでした')
+        if state in ('up_to_date', 'failed', 'ready'):
+            self._update_manual = False
+            self._update_from_tray = False
+        self._refresh_update_controls()
+        self._refresh_view()
+
+    def _maybe_apply_update(self) -> None:
+        """ダウンロード済みの更新を当てて再起動する。
+
+        終了の確認などのダイアログや設定ウィンドウを表示している間は待つ
+        (操作の途中でいきなり終わらないように。終了処理が二重に走らないように)。
+        """
+        ready = self._update_ready
+        if ready is None or self._closing:
+            return
+        if self._modal > 0:
+            return
+        if self._settings_win is not None and self._alive(self._settings_win):
+            return
+        self._update_ready = None
+        # 再起動後に今の状態へ戻すための記録。適用 (新プロセスの起動) より前に書く
+        running = self._running()
+        target = self._stop_target if (running and self._timer_active()) else None
+        self._cfg = settings.update(
+            just_updated=True,
+            resume_after_update=running,
+            resume_in_tray=not self._main_visible(),
+            resume_stop_target=target.isoformat() if target else None,
+            resume_start_time=(self._start_time.isoformat()
+                               if running and self._start_time else None),
+        )
+        if updater.apply_update(ready['path']):
+            self._shutdown('update')
+            return
+        # 失敗: 記録を消して、このまま動き続ける
+        self._cfg = settings.update(
+            just_updated=False, resume_after_update=False, resume_in_tray=False,
+            resume_stop_target=None, resume_start_time=None)
+        self._update_note = None
+        self._set_update_label('更新できませんでした')
+        self._refresh_update_controls()
+        self._refresh_view()
+
+    # ── 位置 ──────────────────────────────────────────────────────────────
+
+    def _virtual_screen(self) -> tuple:
+        """(x, y, 幅, 高さ)。Windows ではすべてのモニタを含む仮想デスクトップ。"""
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                u32 = ctypes.windll.user32
+                vx, vy = u32.GetSystemMetrics(76), u32.GetSystemMetrics(77)
+                vw, vh = u32.GetSystemMetrics(78), u32.GetSystemMetrics(79)
+                if vw > 0 and vh > 0:
+                    return vx, vy, vw, vh
+            except Exception:
+                pass
+        return 0, 0, self.winfo_screenwidth(), self.winfo_screenheight()
 
     def _restore_position(self) -> None:
         x, y = self._cfg.get('win_x'), self._cfg.get('win_y')
@@ -751,377 +1205,98 @@ class App(tk.Tk):
             self.geometry(f'+{x}+{y}')
 
     def _position_on_screen(self, x: int, y: int) -> bool:
-        """保存された座標が、いずれかのモニタを含む表示可能領域に
-        収まっているかを判定する。マルチモニタ環境ではサブモニタ上の
-        座標 (負の x や、プライマリ画面幅を超える x) もあり得るため、
-        Windows では仮想デスクトップ全体の範囲で判定する。
-        取得できない場合やWindows以外では、従来通りプライマリ画面基準で判定する。
-        """
-        if sys.platform == 'win32':
-            try:
-                import ctypes
-                u32 = ctypes.windll.user32
-                SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
-                SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
-                vx = u32.GetSystemMetrics(SM_XVIRTUALSCREEN)
-                vy = u32.GetSystemMetrics(SM_YVIRTUALSCREEN)
-                vw = u32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
-                vh = u32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
-                if vw > 0 and vh > 0:
-                    return (vx - 50 < x < vx + vw - 100
-                            and vy - 50 < y < vy + vh - 100)
-            except Exception:
-                pass
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        return -50 < x < sw - 100 and 0 <= y < sh - 100
+        """保存された座標が、いずれかのモニタを含む表示可能領域に収まっているか。"""
+        vx, vy, vw, vh = self._virtual_screen()
+        return vx - 50 < x < vx + vw - 100 and vy - 50 < y < vy + vh - 100
 
     def _save_position(self) -> None:
         try:
+            if not self._main_visible():
+                return
             x, y = self.winfo_x(), self.winfo_y()
-        except Exception:
+        except tk.TclError:
             return
         self._cfg = settings.update(win_x=x, win_y=y)
 
-    def _refresh_stop_target(self) -> None:
-        if (hasattr(self, '_ctrl')
-                and self._ctrl.state == Controller.RUNNING
-                and not self._stop_triggered):
-            self._stop_target = self._calc_stop_target()
+    # ── スタートアップ ────────────────────────────────────────────────────
 
-    def _calc_stop_target(self) -> 'datetime.datetime | None':
+    def _on_startup_toggle(self) -> None:
+        if sys.platform != 'win32':
+            return
         try:
-            now = datetime.datetime.now()
-            h = int(self._stop_hour.get())
-            m = int(self._stop_min.get())
-            dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
-            if dt <= now:
-                dt += datetime.timedelta(days=1)
-            return dt
-        except (ValueError, AttributeError):
-            return None
-
-    def _on_toggle(self, on: bool) -> None:
-        if on:
-            self._on_start()
-        else:
-            self._on_stop()
-
-    def _on_start(self) -> None:
-        self._stop_triggered = False
-        self._check_time_validity()
-        self._stop_target = self._calc_stop_target()
-        if self._stop_timer_enabled.get() and self._stop_target is None:
-            messagebox.showwarning(
-                "I'm fine", '停止時刻が不正なため停止タイマーは動作しません。',
-                parent=self)
-        self._start_time = datetime.datetime.now()
-        self._ctrl.start()
-        self._toggle_sw.set_state(True)
-        self._update_tray_icon()
-        self._update_status()
-
-    def _on_stop(self) -> None:
-        self._start_time = None
-        self._ctrl.stop()
-        self._toggle_sw.set_state(False)
-        self._update_tray_icon()
-        self._update_status()
-
-    def _update_status(self) -> None:
-        if not hasattr(self, '_status_lbl'):
-            return
-        if self._update_status_override:
-            self._status_lbl.config(text=self._update_status_override)
-            return
-        running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
-        if not running:
-            if self._stop_timer_enabled.get() and self._time_invalid:
-                self._status_lbl.config(text='停止時刻が不正です')
+            if self._startup.get():
+                startup.write(startup.current_command())
             else:
-                self._status_lbl.config(text='停止中')
-            return
-        parts = ['動作中']
-        if self._start_time is not None:
-            sec = int((datetime.datetime.now()
-                       - self._start_time).total_seconds())
-            h, rem = divmod(sec, 3600)
-            m, s = divmod(rem, 60)
-            parts.append(f'{h:d}:{m:02d}:{s:02d}')
-        if self._stop_timer_enabled.get():
-            if self._stop_target is not None:
-                parts.append(f'({self._stop_target:%H:%M} に自動停止)')
-            elif self._time_invalid:
-                # 動作中に停止時刻が無効化され、停止タイマーが効かなくなったことを明示する。
-                parts.append('(自動停止は無効)')
-        self._status_lbl.config(text=' '.join(parts))
+                startup.remove()
+        except OSError:
+            self._dialog(messagebox.showwarning, APP_NAME,
+                         'Windows の起動時に起動する設定を変更できませんでした。',
+                         parent=self._settings_win or self)
+            self._startup.set(startup.read_registered() is not None)
 
-    def _check_stop_timer(self) -> None:
-        if self._update_pending:
-            self._perform_update_shutdown()
-            return
-        if self._update_state is not None:
-            state, self._update_state = self._update_state, None
-            self._apply_update_state(state)
-        if (self._stop_timer_enabled.get()
-                and not self._stop_triggered
-                and hasattr(self, '_ctrl')
-                and self._ctrl.state == Controller.RUNNING
-                and self._stop_target is not None):
-            if datetime.datetime.now() >= self._stop_target:
-                self._stop_triggered = True
-                self._on_stop()
-                if self._tray_icon is not None:
-                    try:
-                        self._tray_icon.notify('停止時刻になったため停止しました')
-                    except Exception:
-                        pass
-        self._update_status()
-        # 起動中の定期更新確認。起動直後・手動確認も含め、_check_for_updates が
-        # 呼ばれるたびに次回時刻が先送りされる。
-        if time.time() >= self._next_update_check:
-            self._check_for_updates()
-        self.after(1000, self._check_stop_timer)
-
-    # ── auto update ───────────────────────────────────────────────────────
-
-    def _check_for_updates(self, force: bool = False) -> None:
-        # どの経路 (起動直後 / 定期 / 手動) から呼ばれても、ここから
-        # 一定時間後を次回とする。早期 return する場合も先送りする
-        # (自動更新無効時に毎秒呼ばれ続けないため)。
-        self._next_update_check = time.time() + updater.RUNTIME_CHECK_INTERVAL_SEC
-        if not getattr(sys, 'frozen', False):
-            return  # ソースから実行時は自己置き換えできないので対象外
-        if not force and not self._auto_update_enabled.get():
-            return
-        updater.check_and_apply_async(
-            VERSION, self._cfg.get('update_check_url'),
-            on_state=self._on_update_state,
-            on_ready_to_restart=self._on_update_ready)
-
-    def _on_update_state(self, state: str) -> None:
-        # updater のバックグラウンドスレッドから呼ばれるため、Tk の操作は
-        # 一切行わずフラグに格納するだけにする。実際の反映は
-        # _check_stop_timer (メインスレッド、1秒ごと) 側で行う。
-        self._update_state = state
-
-    def _apply_update_state(self, state: str) -> None:
-        messages = {
-            'downloading': '更新をダウンロード中…',
-            'applying': '更新を適用しています…',
-        }
-        msg = messages.get(state)
-        # 'checking' はすぐ終わるうえ毎起動出るとうるさいので表示しない。
-        # 'up_to_date' / 'failed' も、失敗を毎回出すとうるさいため通常表示に戻すだけにする。
-        self._update_status_override = msg
-        if msg is not None and self._tray_icon is not None:
-            try:
-                self._tray_icon.notify(msg)
-            except Exception:
-                pass
-
-    def _on_update_ready(self) -> None:
-        # updater のバックグラウンドスレッドから呼ばれるため、
-        # Tk の操作は必ず _check_stop_timer (メインスレッド) 側で行う。
-        self._update_pending = True
-
-    def _perform_update_shutdown(self) -> None:
-        # ユーザーがONにしてトレイに格納していた場合、更新後に黙ってOFFへ
-        # 戻ってしまうと (モニタが消える・在席状態が誤表示される等)
-        # アプリの存在意義に関わる事故になるため、適用直前のON/OFF状態を
-        # 必ず記録してから終了する。
-        self._close_settings_window()
-        running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
-        # トレイ格納中はアイコンが生成されているので、その有無で判定する。
-        # 復元しないと、トレイで作業中に更新が走ると再起動後にウィンドウが前面に出る。
-        in_tray = self._tray_icon is not None
-        self._cfg = settings.update(
-            resume_after_update=running, resume_in_tray=in_tray)
-        self._save_position()
-        icon_ref = self._tray_icon
-        self._tray_icon = None
-        self._stop_tray_icon(icon_ref)
-        if hasattr(self, '_ctrl'):
-            self._ctrl.stop()
-        self.destroy()
-
-    def _update_tray_icon(self) -> None:
-        if self._tray_icon is None:
-            return
-        running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
-        try:
-            self._tray_icon.icon = _load_tray_image(running)
-        except Exception:
-            pass
-
-    # ── window events ─────────────────────────────────────────────────────
+    # ── ウィンドウの操作と終了 ────────────────────────────────────────────
 
     def _on_close(self) -> None:
-        # 常駐ツールとしては × = トレイ格納が一般的。動作を止めるわけではないので
-        # 確認は不要 (終了はトレイメニューの「終了」から行う)。
-        if self._tray_minimize.get():
-            self._minimize_to_tray()
+        if self._close_to_tray.get() and self._go_to_tray():
             return
-        if hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING:
-            if not messagebox.askyesno(
-                    "I'm fine", '動作中です。終了しますか？', parent=self):
-                return
-        self._close_settings_window()
-        self._save_position()
-        icon_ref = self._tray_icon
-        self._tray_icon = None
-        self._stop_tray_icon(icon_ref)
-        if hasattr(self, '_ctrl'):
-            self._ctrl.stop()
-        self.destroy()
+        # トレイに格納しない設定か、トレイが使えない: 通常の終了
+        self._request_quit()
 
     def _on_unmap(self, event: tk.Event) -> None:
-        if event.widget is self and not self._going_to_tray:
+        if event.widget is self and not self._going_to_tray and not self._closing:
             self.after(50, self._check_iconify)
 
     def _check_iconify(self) -> None:
-        # destroy() 後にもこの after コールバックが発火しうるため、
-        # ウィンドウが既に無い場合や wm_state() が例外を投げる場合は無視する。
-        if not self.winfo_exists():
+        if self._closing or not self._alive(self):
             return
         try:
             state = self.wm_state()
         except tk.TclError:
             return
-        if state == 'iconic' and self._tray_minimize.get():
-            self._minimize_to_tray()
+        if state == 'iconic' and self._minimize_to_tray.get():
+            self._go_to_tray()
 
-    def _minimize_to_tray(self) -> None:
-        # メインが隠れているのに設定ウィンドウだけ浮いている状態を避ける。
-        self._close_settings_window()
-        try:
-            import pystray
-            import pystray._win32
-        except ImportError:
+    def _request_quit(self) -> None:
+        """終了する。ON のときだけ確認する。"""
+        if self._closing:
             return
-        self._save_position()
-        if self._tray_icon is not None:
-            self._going_to_tray = True
-            self.withdraw()
-            self._going_to_tray = False
-            return
-
-        _WM_LBUTTONUP     = 0x0202
-        _WM_LBUTTONDBLCLK = 0x0203
-
-        class _TrayIcon(pystray._win32.Icon):
-            def __init__(self, *args, on_left_click=None, on_left_dblclick=None, **kwargs):
-                super().__init__(*args, **kwargs)
-                self._left_click_cb    = on_left_click
-                self._left_dblclick_cb = on_left_dblclick
-                self._click_timer      = None
-                self._ignore_next_up   = False
-
-            def cancel_click_timer(self):
-                if self._click_timer is not None:
-                    self._click_timer.cancel()
-                    self._click_timer = None
-
-            def _on_notify(self, wparam, lparam):
-                if lparam == _WM_LBUTTONDBLCLK:
-                    self.cancel_click_timer()
-                    self._ignore_next_up = True
-                    if self._left_dblclick_cb:
-                        self._left_dblclick_cb()
-                elif lparam == _WM_LBUTTONUP:
-                    if self._ignore_next_up:
-                        self._ignore_next_up = False
-                        return
-                    if self._left_click_cb:
-                        import ctypes
-                        delay = ctypes.windll.user32.GetDoubleClickTime() / 1000.0
-                        self.cancel_click_timer()
-                        self._click_timer = threading.Timer(delay, self._fire_click)
-                        self._click_timer.start()
-                    else:
-                        super()._on_notify(wparam, lparam)
-                else:
-                    super()._on_notify(wparam, lparam)
-
-            def _fire_click(self):
-                self._click_timer = None
-                if self._left_click_cb:
-                    try:
-                        self._left_click_cb()
-                    except Exception:
-                        pass
-
-        running = hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING
-        try:
-            img = _load_tray_image(running)
-        except Exception:
-            img = Image.new('RGB', (64, 64),
-                            '#4CAF50' if running else '#9E9E9E')
-        menu = pystray.Menu(
-            pystray.MenuItem('タスクトレイから出す',
-                             self._tray_restore, default=True),
-            pystray.MenuItem('更新を確認', self._tray_check_update),
-            pystray.MenuItem('終了', self._tray_quit),
-        )
-        try:
-            self._tray_icon = _TrayIcon(
-                "I'm fine", img, "I'm fine", menu,
-                on_left_click=lambda: self.after(0, self._tray_toggle),
-                on_left_dblclick=lambda: self.after(0, self._tray_restore),
-            )
-            self._tray_icon.run_detached()
-            self._tray_icon.visible = True
-        except Exception:
-            self._tray_icon = None
-            return
-        self._going_to_tray = True
-        self.withdraw()
-        self._going_to_tray = False
-
-    def _tray_toggle(self) -> None:
-        if hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING:
-            self._on_stop()
-            msg = '停止しました'
-        else:
-            self._on_start()
-            msg = '開始しました'
-        if self._tray_icon is not None:
-            try:
-                self._tray_icon.notify(msg)
-            except Exception:
-                pass
-
-    @staticmethod
-    def _stop_tray_icon(icon_ref) -> None:
-        if icon_ref is None:
-            return
-        if hasattr(icon_ref, 'cancel_click_timer'):
-            icon_ref.cancel_click_timer()
-        icon_ref.stop()
-
-    def _tray_restore(self, icon=None, item=None) -> None:
-        icon_ref = self._tray_icon
-        self._tray_icon = None
-        self._stop_tray_icon(icon_ref)
-        self.after(0, self.deiconify)
-        self.after(0, self._apply_titlebar_theme)
-
-    def _tray_check_update(self, icon=None, item=None) -> None:
-        # auto_update_enabled の値に関わらず、手動要求は即座にチェックする。
-        self.after(0, lambda: self._check_for_updates(force=True))
-
-    def _tray_quit(self, icon=None, item=None) -> None:
-        self.after(0, self._confirm_tray_quit)
-
-    def _confirm_tray_quit(self) -> None:
-        if hasattr(self, '_ctrl') and self._ctrl.state == Controller.RUNNING:
-            if not messagebox.askyesno(
-                    "I'm fine", '動作中です。終了しますか？', parent=self):
+        if self._running():
+            ok = self._dialog(messagebox.askyesno, APP_NAME,
+                              'ON のままです。終了すると OFF になります。終了しますか？',
+                              parent=self)
+            if not ok or self._closing:
                 return
-        self._close_settings_window()
-        self._save_position()
-        icon_ref = self._tray_icon
-        self._tray_icon = None
-        self._stop_tray_icon(icon_ref)
-        if hasattr(self, '_ctrl'):
+        self._shutdown('user')
+
+    def _shutdown(self, reason: str) -> None:
+        """終了処理はすべてここを通す。二重に走らないようにする。"""
+        if self._closing:
+            return
+        self._closing = True
+        try:
+            if reason != 'update':
+                self._save_position()
+            self._close_settings_window()
+            self._tray.stop()
             self._ctrl.stop()
-        self.destroy()
+            ready = self._update_ready
+            if ready and ready.get('path'):
+                # 当てずに終わる更新ファイルは残さない
+                try:
+                    os.remove(ready['path'])
+                except OSError:
+                    pass
+            instance.close(self._show_event)
+        except Exception:
+            applog.log_exception(*sys.exc_info(), where='終了処理')
+        finally:
+            # 予約済みの定期処理・アニメーションを取り消してから壊す
+            try:
+                for after_id in self.tk.splitlist(self.tk.call('after', 'info')):
+                    self.after_cancel(after_id)
+            except tk.TclError:
+                pass
+            try:
+                self.destroy()
+            except tk.TclError:
+                pass

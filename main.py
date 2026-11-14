@@ -81,11 +81,12 @@ def _try_create_mutex(kernel32, ctypes):
     return handle, already_exists
 
 
-def _check_single_instance(after_update: bool = False) -> None:
+def _check_single_instance(after_update: bool = False, show_event=None) -> None:
     """多重起動をミューテックスで防ぐ。
 
-    通常起動 (after_update=False) では、既に他インスタンスが起動していれば
-    即座に案内を出して終了する (従来通り)。
+    通常起動 (after_update=False) では、既に他インスタンスが起動していれば、
+    名前付きイベント (show_event) で既存のインスタンスに「ウィンドウを出して」と
+    伝えて黙って終了する。伝えられなかったときだけ案内を出す。
 
     更新直後 (after_update=True) は、旧プロセスがまだミューテックスを
     保持したまま終了処理中の可能性があるため、最大 AFTER_UPDATE_WAIT_SEC 秒
@@ -127,28 +128,38 @@ def _check_single_instance(after_update: bool = False) -> None:
     _mutex_handle = handle
 
     if already_exists:
+        if instance.signal_existing(show_event):
+            instance.close(show_event)
+            sys.exit(0)
         import tkinter as tk
         from tkinter import messagebox
         root = tk.Tk()
         root.withdraw()
-        messagebox.showinfo("I'm fine", "I'm fineはすでに起動しています。")
+        messagebox.showinfo("I'm fine", "I'm fine はすでに起動しています。")
         root.destroy()
         sys.exit(0)
 
 
-from ui import App
+import applog
+import instance
 import updater
+from ui import App
 
 
 def main() -> None:
+    applog.install_hooks()
     _set_dpi_aware()
     pid = _parse_after_update_pid(sys.argv[1:])
     after_update = pid is not None
     if after_update:
         _wait_for_previous_process_exit(pid, updater.PREV_PROCESS_WAIT_SEC)
-    _check_single_instance(after_update=after_update)
+    # 二重起動の合図に使うイベント。ミューテックスの判定より前に作って (開いて) おく
+    show_event = instance.open_event()
+    _check_single_instance(after_update=after_update, show_event=show_event)
+    # ここからは自分が唯一のインスタンス。起動前に立っていた古い合図は捨てる
+    instance.reset(show_event)
     updater.recover_or_cleanup()
-    app = App()
+    app = App(show_event=show_event)
     app.mainloop()
 
 

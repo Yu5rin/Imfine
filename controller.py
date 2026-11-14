@@ -28,6 +28,15 @@ def _send_heartbeat() -> None:
 
 
 class Controller:
+    """ON の間、モニタのスリープと「退席中」を防ぐ。
+
+    メインスレッド専用。start() / stop() は必ずメインスレッド (Tk のスレッド) から
+    呼ぶこと。SetThreadExecutionState は呼んだスレッドに対して効くため、
+    別のスレッドから呼ぶと、そのスレッドが終わった時点で効果が消えたり、
+    stop() で解除したつもりが解除されなかったりする。トレイのメニューや
+    更新のスレッドからは、命令をキューに積んでメインスレッドで実行する。
+    (定期的なキー・マウスの送信だけは、専用のスレッドで行う)
+    """
     IDLE    = 'idle'
     RUNNING = 'running'
     STOPPED = 'stopped'

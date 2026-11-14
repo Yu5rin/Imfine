@@ -113,9 +113,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # テストが1つでも失敗したら、ビルドもリリースもしない
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
       - name: Generate icons
         run: python icon_gen.py
 
+      # exe に埋め込むバージョン情報 (version_info.txt) は ImFine.spec が
+      # ui.py の VERSION から作る
       - name: Build exe
         run: pyinstaller ImFine.spec
 

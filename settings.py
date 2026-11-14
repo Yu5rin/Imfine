@@ -7,16 +7,22 @@ import tempfile
 import threading
 
 DEFAULTS: dict = {
-    'theme': 'light',
+    'theme': 'system',             # 'system'（Windows に合わせる）/ 'light' / 'dark'
     'stop_timer_enabled': False,
     'stop_hour': 17,
     'stop_min': 0,
-    'tray_minimize': True,
+    'minimize_to_tray': True,      # 最小化したらタスクトレイに格納する
+    'close_to_tray': True,         # 閉じる（×）でタスクトレイに格納する
+    'notify_toggle': False,        # ON/OFF を切り替えたとき通知する
+    'tray_hint_shown': False,      # 「タスクトレイで動作しています」を表示済みか
     'auto_on': False,
     'start_in_tray': False,        # 起動時に直接トレイへ格納する
-    'auto_update_enabled': True,   # 自動アップデートの有効/無効
+    'auto_update_enabled': True,   # 自動更新の有効/無効
     'resume_after_update': False,  # 更新再起動後に ON を復元するための内部フラグ
     'resume_in_tray': False,       # 更新再起動後にトレイ格納を復元するための内部フラグ
+    'resume_stop_target': None,    # 更新前の停止目標時刻 (ISO 形式の文字列。内部用)
+    'resume_start_time': None,     # 更新前に ON にした時刻 (ISO 形式の文字列。内部用)
+    'just_updated': False,         # 更新して再起動した直後か (内部用。通知を1回出す)
     'win_x': None,
     'win_y': None,
     'update_check_url': 'https://api.github.com/repos/Yu5rin/Imfine/releases/latest',
@@ -126,19 +132,44 @@ def _clamp(v: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, v))
 
 
+def _to_str_or_none(v):
+    return v if isinstance(v, str) and v else None
+
+
+def migrate(raw: dict) -> dict:
+    """古い版の設定を、この版の項目へ引き継ぐ (ファイルから読んだ生の値に対して行う)。
+
+    - v1.15.0 までの tray_minimize は「最小化」と「×」の両方の動作を決めていた。
+      2つに分けた minimize_to_tray / close_to_tray がまだ無ければ、その値を両方の
+      初期値にする。tray_minimize 自体は消さない (前の版に戻したときのため)。
+    - theme は、ファイルにすでに 'light' / 'dark' があればそのまま使う。
+      無いとき (新規) だけ既定の 'system' になる。
+    """
+    out = dict(raw)
+    if 'tray_minimize' in out:
+        for key in ('minimize_to_tray', 'close_to_tray'):
+            if key not in out:
+                out[key] = out['tray_minimize']
+    return out
+
+
 def _validate(data: dict) -> dict:
     """読み込んだ設定の型・範囲を検証し、不正な値はデフォルトへ差し戻す。
     未知のキーはそのまま保持する (手動編集や将来の拡張を壊さないため)。
     """
     out = dict(data)
 
-    if out.get('theme') not in ('light', 'dark'):
+    if out.get('theme') not in ('system', 'light', 'dark'):
         out['theme'] = DEFAULTS['theme']
 
-    for key in ('stop_timer_enabled', 'tray_minimize', 'auto_on',
+    for key in ('stop_timer_enabled', 'minimize_to_tray', 'close_to_tray',
+                'notify_toggle', 'tray_hint_shown', 'auto_on',
                 'start_in_tray', 'auto_update_enabled', 'resume_after_update',
-                'resume_in_tray'):
+                'resume_in_tray', 'just_updated'):
         out[key] = _to_bool(out.get(key, DEFAULTS[key]))
+
+    for key in ('resume_stop_target', 'resume_start_time'):
+        out[key] = _to_str_or_none(out.get(key))
 
     out['stop_hour'] = _clamp(_to_int_or(out.get('stop_hour'), DEFAULTS['stop_hour']), 0, 23)
     out['stop_min'] = _clamp(_to_int_or(out.get('stop_min'), DEFAULTS['stop_min']), 0, 59)
@@ -156,10 +187,12 @@ def _validate(data: dict) -> dict:
 def load() -> dict:
     try:
         with open(_get_path(), encoding='utf-8') as f:
-            data = {**DEFAULTS, **json.load(f)}
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            raw = {}
     except Exception:
-        data = dict(DEFAULTS)
-    return _validate(data)
+        raw = {}
+    return _validate({**DEFAULTS, **migrate(raw)})
 
 
 def save(data: dict) -> None:

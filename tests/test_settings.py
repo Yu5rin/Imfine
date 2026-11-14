@@ -152,5 +152,63 @@ class UpdaterKeepsDataTests(_Env):
         self.assertTrue((data / 'settings.json').exists())
 
 
+class SettingsMigrationTests(_Env):
+    """v1.15.0 までの設定からの引き継ぎ (最小化と×の分離、テーマの既定)。"""
+
+    def setUp(self):
+        super().setUp()
+        self.frozen()
+        self.path = self.exe_dir / 'data' / 'settings.json'
+
+    def test_tray_minimize_false_は両方に引き継ぐ(self):
+        self.put(self.path, '{"tray_minimize": false, "theme": "light"}')
+        cfg = settings.load()
+        self.assertFalse(cfg['minimize_to_tray'])
+        self.assertFalse(cfg['close_to_tray'])
+
+    def test_tray_minimize_true_は両方に引き継ぐ(self):
+        self.put(self.path, '{"tray_minimize": true}')
+        cfg = settings.load()
+        self.assertTrue(cfg['minimize_to_tray'])
+        self.assertTrue(cfg['close_to_tray'])
+
+    def test_新しい項目があれば上書きしない(self):
+        self.put(self.path, '{"tray_minimize": false, "minimize_to_tray": true}')
+        cfg = settings.load()
+        self.assertTrue(cfg['minimize_to_tray'])
+        self.assertFalse(cfg['close_to_tray'])
+
+    def test_既存のテーマはそのまま(self):
+        for value in ('light', 'dark', 'system'):
+            with self.subTest(theme=value):
+                self.put(self.path, '{"theme": "%s"}' % value)
+                self.assertEqual(settings.load()['theme'], value)
+
+    def test_新規の既定は_system(self):
+        self.assertEqual(settings.load()['theme'], 'system')
+
+    def test_不正なテーマは既定へ(self):
+        self.put(self.path, '{"theme": "blue"}')
+        self.assertEqual(settings.load()['theme'], 'system')
+
+    def test_新しい項目の既定(self):
+        cfg = settings.load()
+        self.assertFalse(cfg['notify_toggle'])
+        self.assertFalse(cfg['tray_hint_shown'])
+        self.assertFalse(cfg['just_updated'])
+        self.assertIsNone(cfg['resume_stop_target'])
+        self.assertIsNone(cfg['resume_start_time'])
+
+    def test_再起動の引き継ぎ値は文字列か_None(self):
+        self.put(self.path, '{"resume_stop_target": 5, "resume_start_time": "2026-11-14T09:00:00"}')
+        cfg = settings.load()
+        self.assertIsNone(cfg['resume_stop_target'])
+        self.assertEqual(cfg['resume_start_time'], '2026-11-14T09:00:00')
+
+    def test_オブジェクトでないファイルは既定で読む(self):
+        self.put(self.path, '[1, 2]')
+        self.assertEqual(settings.load()['theme'], 'system')
+
+
 if __name__ == '__main__':
     unittest.main()

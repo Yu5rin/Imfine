@@ -1,4 +1,5 @@
 import datetime
+import glob
 import hashlib
 import json
 import os
@@ -209,7 +210,8 @@ def check_latest(url: str, user_agent: str = DEFAULT_USER_AGENT) -> dict | None:
         _log('確認失敗: レスポンスがオブジェクトではない')
         return None
 
-    tag = release.get('tag_name', '')
+    # API の値は null のこともあるため、文字列として受ける
+    tag = str(release.get('tag_name') or '')
     _log(f'取得したtag_name: {tag}')
 
     if release.get('draft'):
@@ -229,7 +231,7 @@ def find_exe_asset(release: dict) -> dict | None:
     for asset in assets:
         if not isinstance(asset, dict):
             continue
-        if asset.get('name', '').lower().endswith('.exe'):
+        if str(asset.get('name') or '').lower().endswith('.exe'):
             return asset
     return None
 
@@ -257,19 +259,19 @@ def download_and_verify(asset: dict, dest_dir: str,
     同一ボリュームにダウンロードしておくことで、最後の置き換えを
     os.replace() (同一ボリューム内で高速かつアトミック) で行える。
     """
-    digest = asset.get('digest', '')  # GitHub が付与する 'sha256:xxxx' 形式
+    digest = str(asset.get('digest') or '')  # GitHub が付与する 'sha256:xxxx' 形式
     if not digest.startswith('sha256:'):
         _log('ダウンロード失敗: digestが無い/形式が不正')
         return None
     expected = digest.split(':', 1)[1].lower()
 
-    url = asset.get('browser_download_url', '')
+    url = str(asset.get('browser_download_url') or '')
     if not _is_allowed_url(url, ALLOWED_DOWNLOAD_HOSTS):
         _log(f'ダウンロード失敗: 許可されていないホスト url={url}')
         return None
 
     _log(f'ダウンロード開始: url={url}')
-    fd, tmp_path = tempfile.mkstemp(prefix='imfine_update_', suffix='.exe', dir=dest_dir)
+    fd, tmp_path = tempfile.mkstemp(prefix=DOWNLOAD_PREFIX, suffix='.exe', dir=dest_dir)
     os.close(fd)
     try:
         headers = {
@@ -315,6 +317,21 @@ def download_and_verify(asset: dict, dest_dir: str,
     return tmp_path
 
 
+def _restart_env() -> dict:
+    """新しいプロセスに渡す環境変数。
+
+    PyInstaller の単一 exe は、起動時に自分用の一時フォルダ (_MEIxxxx) へ展開し、
+    その場所を _PYI_ARCHIVE_FILE / _PYI_APPLICATION_HOME_DIR などの環境変数で
+    子プロセスへ伝える。環境変数をそのまま引き継ぐと、新しい exe のブートローダは
+    「自分は子プロセスだ」とみなして展開をやり直さず、旧プロセスの一時フォルダを
+    使い回す。旧プロセスが終わるとそのフォルダは消されるため、新プロセスで
+    ファイルが見つからなくなる。PyInstaller 6.9 以降は、別のアプリとして
+    起動し直すときに PYINSTALLER_RESET_ENVIRONMENT=1 を渡すことが必要とされている
+    (公式ドキュメント「Implementing application restart」)。
+    """
+    return {**os.environ, 'PYINSTALLER_RESET_ENVIRONMENT': '1'}
+
+
 def _spawn_restart(current_exe: str, old_pid: int) -> bool:
     """新しい exe を直接起動する。
 
@@ -324,12 +341,15 @@ def _spawn_restart(current_exe: str, old_pid: int) -> bool:
     Process.Start で新しい exe を直接起動し、旧プロセスの終了待ちは
     新プロセス側 (--after-update 引数) に委ねている。それに合わせる。
     """
+    # DETACHED_PROCESS は Windows にしか無い (それ以外では creationflags は 0 でなければならない)
+    flags = getattr(subprocess, 'DETACHED_PROCESS', 0) if sys.platform == 'win32' else 0
     try:
         subprocess.Popen(
             [current_exe, AFTER_UPDATE_ARG, str(old_pid)],
-            creationflags=subprocess.DETACHED_PROCESS,
+            creationflags=flags,
             cwd=os.path.dirname(current_exe),
             close_fds=True,
+            env=_restart_env(),
         )
         _log(f'新プロセスの起動: {current_exe} {AFTER_UPDATE_ARG} {old_pid}')
         return True
@@ -401,13 +421,19 @@ def apply_update(new_exe_path: str) -> bool:
     return True
 
 
+# ダウンロード途中のファイル名の形 (download_and_verify の mkstemp と合わせる)
+DOWNLOAD_PREFIX = 'imfine_update_'
+
+
 def recover_or_cleanup() -> None:
-    """前回更新時の .old ファイルを削除する (次回起動時に呼ぶ)。
+    """前回更新時の .old ファイルと、ダウンロード途中のファイルを削除する (起動時に呼ぶ)。
 
     この関数が呼ばれている時点で現在の exe は正常に起動できているため、
     .old が残っていれば前回更新の残骸として削除する。
     (「exe 自体が消えて起動できない」状態からの自動復旧はアプリ自身では
     不可能なので、apply_update 側で危険な時間帯を極小化する方針としている)
+    ダウンロードの途中でアプリを終了すると、exe と同じフォルダに
+    imfine_update_*.exe が残るため、これも消す。
     削除に失敗しても無視する。
     """
     if not getattr(sys, 'frozen', False):
@@ -416,79 +442,112 @@ def recover_or_cleanup() -> None:
     if os.path.exists(old_path):
         _safe_remove(old_path)
         _log(f'前回更新の残骸を削除した: {old_path}')
+    exe_dir = os.path.dirname(sys.executable)
+    for path in glob.glob(os.path.join(glob.escape(exe_dir), DOWNLOAD_PREFIX + '*.exe')):
+        _safe_remove(path)
+        if not os.path.exists(path):
+            _log(f'ダウンロード途中の残骸を削除した: {path}')
+
+
+# 更新の確認〜ダウンロードを同時に1つしか走らせないためのロック。
+# 手動の「更新を確認」を連打したり、定期確認と重なったりしても、並行して
+# ダウンロード・置き換えが走らないようにする。
+_RUN_LOCK = threading.Lock()
+
+
+def is_running() -> bool:
+    """更新の確認〜ダウンロードが実行中なら True。"""
+    return _RUN_LOCK.locked()
 
 
 def check_and_apply_async(current_version: str, url: str,
-                          on_state=None, on_ready_to_restart=None) -> None:
+                          on_state=None, on_ready_to_restart=None,
+                          apply: bool = True) -> bool:
     """バックグラウンドで更新確認〜適用まで行う。UI をブロックしない。
-    起動するたびに毎回チェックする。
+
+    すでに実行中なら何もせず False を返す (並行して走らせない)。
+    開始したら True を返す。
 
     on_state は進捗を UI に伝えるためのコールバックで、
-    バックグラウンドスレッドから呼ばれる (呼び出し側で Tk 操作などを
-    行う場合は必ずメインスレッドへ安全に伝播すること)。
-    渡される値は次のいずれか:
+    バックグラウンドスレッドから on_state(state, info) の形で呼ばれる
+    (呼び出し側で Tk 操作などを行う場合は必ずメインスレッドへ安全に伝播すること)。
+    info は dict で、分かる範囲で 'latest' (最新の版のタグ) を含む。
+    state は次のいずれか:
       'checking'    最新版を確認中
-      'downloading' ダウンロード中
-      'applying'    置き換え中
-      'up_to_date'  最新版だった (何もしない)
+      'up_to_date'  最新版だった (何もしない)。info['latest'] に最新の版
+      'downloading' ダウンロード中。info['latest'] に新しい版
+      'ready'       ダウンロードと検証が済んだ (apply=False のときだけ)。
+                    info['path'] にダウンロードしたファイル、info['latest'] に版。
+                    置き換え (apply_update) は呼び出し側が行う
+      'applying'    置き換え中 (apply=True のときだけ)
       'failed'      確認・ダウンロード・検証・適用のいずれかに失敗
 
-    on_ready_to_restart は、置き換えが完了し自プロセスを終了してよく
-    なった時にバックグラウンドスレッドから呼ばれる (呼び出し側で
-    メインスレッドへ安全に伝播すること)。
+    on_ready_to_restart は、apply=True のとき、置き換えが完了し自プロセスを
+    終了してよくなった時にバックグラウンドスレッドから呼ばれる。
 
     設定ファイルへの書き込みはここでは一切行わない
     (メインスレッドの保存処理と競合させないため)。
     """
     if not url:
-        return
+        return False
+    if not _RUN_LOCK.acquire(blocking=False):
+        _log('更新の確認はすでに実行中のため、今回は何もしない')
+        return False
 
-    def _notify(state: str) -> None:
+    def _notify(state: str, **info) -> None:
         if on_state is None:
             return
         try:
-            on_state(state)
+            on_state(state, info)
         except Exception:
             pass
 
     user_agent = f'ImFine/{current_version}'
 
-    def _worker():
+    def _run():
         _notify('checking')
         _log(f'現在のバージョン: {current_version}')
         release = check_latest(url, user_agent=user_agent)
         if release is None:
             _notify('failed')
             return
-        tag = release.get('tag_name', '')
+        tag = str(release.get('tag_name') or '')
+        if not tag:
+            _log('確認失敗: tag_name が無い')
+            _notify('failed')
+            return
         if not _is_newer(tag, current_version):
             _log(f'最新版です (現在 {current_version}, 最新 {tag})')
-            _notify('up_to_date')
+            _notify('up_to_date', latest=tag)
             return
         _log(f'新しい版があります (現在 {current_version} -> {tag})')
         asset = find_exe_asset(release)
         if asset is None:
             _log('確認失敗: exeアセットが見つからない')
-            _notify('failed')
+            _notify('failed', latest=tag)
             return
 
         if not getattr(sys, 'frozen', False):
             _log('確認失敗: frozen (PyInstaller exe) 実行ではないため更新をスキップ')
-            _notify('failed')
+            _notify('failed', latest=tag)
             return
         current_dir = os.path.dirname(sys.executable)
         if not _can_write(current_dir):
             _log(f'確認失敗: 書き込み権限なし dir={current_dir}')
-            _notify('failed')
+            _notify('failed', latest=tag)
             return
 
-        _notify('downloading')
+        _notify('downloading', latest=tag)
         new_path = download_and_verify(asset, current_dir, user_agent=user_agent)
         if new_path is None:
-            _notify('failed')
+            _notify('failed', latest=tag)
             return
 
-        _notify('applying')
+        if not apply:
+            _notify('ready', latest=tag, path=new_path)
+            return
+
+        _notify('applying', latest=tag)
         if apply_update(new_path):
             _log('更新完了。新プロセスへ引き継ぐ')
             if on_ready_to_restart is not None:
@@ -497,6 +556,23 @@ def check_and_apply_async(current_version: str, url: str,
                 except Exception:
                     pass
         else:
-            _notify('failed')
+            _notify('failed', latest=tag)
 
-    threading.Thread(target=_worker, daemon=True).start()
+    def _worker():
+        # 想定外の例外 (API の値の型が違う、など) でスレッドが黙って死ぬと、
+        # UI が「確認中」「ダウンロード中」のまま固まる。必ず failed を伝え、
+        # ロックも必ず外す。
+        try:
+            _run()
+        except Exception as e:
+            _log(f'更新処理で想定外のエラー: {type(e).__name__}: {e}')
+            _notify('failed')
+        finally:
+            _RUN_LOCK.release()
+
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception:
+        _RUN_LOCK.release()
+        raise
+    return True

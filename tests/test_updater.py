@@ -7,6 +7,7 @@
 """
 import http.server
 import os
+import pathlib
 import sys
 import tempfile
 import threading
@@ -209,6 +210,152 @@ class CheckLatestTests(_Quiet):
             self.assertIsNone(updater.check_latest(
                 'https://api.github.com/repos/Yu5rin/Imfine/releases/latest'))
             self.assertEqual(m.call_args.args[3], (updater.ALLOWED_API_HOST,))
+
+
+class RestartEnvTests(_Quiet):
+    """B1: 更新後の再起動で、新しいプロセスに旧プロセスの一時フォルダを使い回させない。"""
+
+    def test_PYINSTALLER_RESET_ENVIRONMENT_を渡す(self):
+        with mock.patch.dict(os.environ, {'_PYI_ARCHIVE_FILE': r'C:\old\ImFine.exe',
+                                          'KEEP_ME': '1'}), \
+                mock.patch.object(updater.subprocess, 'Popen') as popen:
+            self.assertTrue(updater._spawn_restart(r'C:\app\ImFine.exe', 1234))
+        env = popen.call_args.kwargs['env']
+        self.assertEqual(env['PYINSTALLER_RESET_ENVIRONMENT'], '1')
+        self.assertEqual(env['KEEP_ME'], '1')  # ほかの環境変数は引き継ぐ
+        args = popen.call_args.args[0]
+        self.assertEqual(args[1:], [updater.AFTER_UPDATE_ARG, '1234'])
+
+    def test_起動に失敗したら_False(self):
+        with mock.patch.object(updater.subprocess, 'Popen', side_effect=OSError('x')):
+            self.assertFalse(updater._spawn_restart('ImFine.exe', 1))
+
+
+class _AsyncRun(_Quiet):
+    """check_and_apply_async を走らせ、終わるまで待つ。"""
+
+    def run_async(self, **kwargs):
+        states = []
+        done = threading.Event()
+
+        def on_state(state, info):
+            states.append((state, info))
+            if state in ('up_to_date', 'failed', 'ready'):
+                done.set()
+
+        started = updater.check_and_apply_async(
+            '1.16.0', 'https://api.github.com/repos/Yu5rin/Imfine/releases/latest',
+            on_state=on_state, **kwargs)
+        self.assertTrue(started)
+        self.assertTrue(done.wait(5))
+        # ロックが外れるまで待つ
+        for _ in range(100):
+            if not updater.is_running():
+                break
+            threading.Event().wait(0.01)
+        self.assertFalse(updater.is_running())
+        return states
+
+
+class WorkerRobustnessTests(_AsyncRun):
+    """B7: 想定外の例外や null の値で、状態表示が固まらない。"""
+
+    def test_想定外の例外でも_failed_を伝えてロックを外す(self):
+        with mock.patch.object(updater, 'check_latest', side_effect=RuntimeError('boom')):
+            states = self.run_async()
+        self.assertEqual(states[-1][0], 'failed')
+        self.assertTrue(any('想定外' in str(c.args[0]) for c in self.log.call_args_list))
+
+    def test_tag_name_が_null_なら_failed(self):
+        with mock.patch.object(updater, 'check_latest', return_value={'tag_name': None}):
+            states = self.run_async()
+        self.assertEqual(states[-1][0], 'failed')
+
+    def test_最新なら版の情報も渡す(self):
+        with mock.patch.object(updater, 'check_latest', return_value={'tag_name': 'v1.16.0'}):
+            states = self.run_async()
+        self.assertEqual(states[-1], ('up_to_date', {'latest': 'v1.16.0'}))
+
+    def test_name_や_digest_が_null_でも落ちない(self):
+        self.assertIsNone(updater.find_exe_asset({'assets': [{'name': None}]}))
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(updater.download_and_verify(
+                {'name': 'ImFine.exe', 'digest': None, 'browser_download_url': None}, d))
+
+    def test_apply_False_なら検証済みのファイルを渡すだけで置き換えない(self):
+        release = {'tag_name': 'v9.0.0', 'assets': [{'name': 'ImFine.exe'}]}
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(updater, 'check_latest', return_value=release), \
+                mock.patch.object(sys, 'frozen', True, create=True), \
+                mock.patch.object(sys, 'executable', os.path.join(d, 'ImFine.exe')), \
+                mock.patch.object(updater, 'download_and_verify',
+                                  return_value=os.path.join(d, 'x.exe')), \
+                mock.patch.object(updater, 'apply_update') as apply:
+            states = self.run_async(apply=False)
+        apply.assert_not_called()
+        self.assertEqual([s for s, _ in states], ['checking', 'downloading', 'ready'])
+        self.assertEqual(states[-1][1]['latest'], 'v9.0.0')
+
+
+class ConcurrencyTests(_Quiet):
+    """B5: 実行中に呼ばれても並行して走らせない。"""
+
+    def test_実行中は何もしない(self):
+        gate = threading.Event()
+
+        def slow(*a, **k):
+            gate.wait(5)
+            return None
+
+        with mock.patch.object(updater, 'check_latest', side_effect=slow):
+            url = 'https://api.github.com/repos/Yu5rin/Imfine/releases/latest'
+            self.assertTrue(updater.check_and_apply_async('1.0.0', url))
+            self.assertTrue(updater.is_running())
+            self.assertFalse(updater.check_and_apply_async('1.0.0', url))
+            gate.set()
+            for _ in range(200):
+                if not updater.is_running():
+                    break
+                threading.Event().wait(0.01)
+        self.assertFalse(updater.is_running())
+
+    def test_URL_が無ければ始めない(self):
+        self.assertFalse(updater.check_and_apply_async('1.0.0', ''))
+        self.assertFalse(updater.is_running())
+
+
+class CleanupTests(_Quiet):
+    """B13: ダウンロード途中の imfine_update_*.exe を起動時に消す。"""
+
+    def test_途中のファイルだけを消す(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            exe = d / 'ImFine.exe'
+            exe.write_text('x')
+            leftovers = [d / 'imfine_update_abc.exe', d / 'imfine_update_.exe']
+            for p in leftovers:
+                p.write_text('partial')
+            keep = [d / 'other.exe', d / 'imfine_update_abc.txt']
+            for p in keep:
+                p.write_text('keep')
+            (d / 'ImFine.exe.old').write_text('old')
+            with mock.patch.object(sys, 'frozen', True, create=True), \
+                    mock.patch.object(sys, 'executable', str(exe)):
+                updater.recover_or_cleanup()
+            for p in leftovers:
+                self.assertFalse(p.exists(), p)
+            for p in keep + [exe]:
+                self.assertTrue(p.exists(), p)
+            self.assertFalse((d / 'ImFine.exe.old').exists())
+
+    def test_ソース実行では何もしない(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / 'imfine_update_x.exe'
+            p.write_text('x')
+            with mock.patch.object(sys, 'frozen', False, create=True), \
+                    mock.patch.object(sys, 'executable', str(pathlib.Path(d) / 'python.exe')):
+                updater.recover_or_cleanup()
+            self.assertTrue(p.exists())
 
 
 if __name__ == '__main__':

@@ -21,6 +21,33 @@ def _draw_available(size: int) -> Image.Image:
     return img.resize((size, size), Image.LANCZOS)
 
 
+def _draw_paused(size: int) -> Image.Image:
+    """OFF のときのトレイアイコン。灰色の丸に一時停止の二本線。
+
+    色だけでなく形でも ON (チェック) と区別できるようにする。
+    """
+    S = 4
+    w = size * S
+    img = Image.new('RGBA', (w, w), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    pad = max(2, int(w * 0.03))
+    d.ellipse([pad, pad, w - pad - 1, w - pad - 1],
+              fill='#8A9099', outline='#6B7280', width=max(2, int(w * 0.04)))
+
+    bar_w = int(w * 0.11)
+    top, bottom = int(w * 0.30), int(w * 0.70)
+    for cx in (int(w * 0.40), int(w * 0.60)):
+        d.rounded_rectangle([cx - bar_w // 2, top, cx + bar_w // 2, bottom],
+                            radius=bar_w // 3, fill='white')
+
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def save_paused_png(path: str = 'icon_off.png') -> None:
+    _draw_paused(256).save(path)
+
+
 def main() -> None:
     sizes = [16, 32, 48, 256]
     imgs = {s: _draw_available(s) for s in sizes}
@@ -38,7 +65,8 @@ def main() -> None:
         append_images=[imgs[s] for s in sizes if s != max(sizes)],
     )
     base.save('icon.png')
-    print('Generated icon.ico and icon.png')
+    save_paused_png('icon_off.png')
+    print('Generated icon.ico, icon.png and icon_off.png')
 
 
 if __name__ == '__main__':
